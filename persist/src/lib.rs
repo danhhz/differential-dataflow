@@ -18,13 +18,6 @@ pub struct PBatch<'b> {
 }
 
 impl<'b> PBatch<'b> {
-    // pub fn from_bytes(buf: Vec<u8>) -> Result<Self, Box<dyn std::error::Error>> {
-    //     let buf = buf.as_ref();
-    //     let message_reader = serialize_packed::read_message(&mut buf, ReaderOptions::new())?;
-    //     let b = message_reader.get_root::<capnpgen::batch::Reader>()?;
-    //     Batch::from_reader(b)
-    // }
-
     pub fn from_reader(b: capnpgen::batch::Reader<'b>) -> Result<Self, Box<dyn std::error::Error>> {
         let d = Description::new(
             Antichain::from_elem(b.get_lower()),

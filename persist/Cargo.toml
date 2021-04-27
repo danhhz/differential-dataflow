@@ -15,5 +15,8 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 differential-dataflow = { path = "../" }
 
 [dev-dependencies]
+criterion = { version = "0.3", features = [ "html_reports" ] }
 
-[features]
+[[bench]]
+name = "capnp"
+harness = false
