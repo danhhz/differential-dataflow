@@ -35,7 +35,7 @@ fn gen_batch(tuples: u32) -> Vec<u8> {
 }
 
 fn capnp_benchmark(c: &mut Criterion) {
-    let batch = gen_batch(1000);
+    let batch = gen_batch(1000000);
 
     c.bench_function("decode", |b| {
         b.iter(|| {
@@ -57,7 +57,13 @@ fn capnp_benchmark(c: &mut Criterion) {
         .get_root::<capnpgen::batch::Reader>()
         .unwrap();
     let batch = PBatch::from_reader(batch).unwrap();
-    c.bench_function("access", |b| {
+    c.bench_function("get_key", |b| {
+        b.iter(|| {
+            let c = batch.cursor();
+            assert!(c.get_key(&batch).is_some());
+        })
+    });
+    c.bench_function("seek_key", |b| {
         b.iter(|| {
             let mut c = batch.cursor();
             c.seek_key(&batch, &b"b"[..]);
