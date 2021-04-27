@@ -6,14 +6,17 @@
 //! supports efficient seeking (via the `seek_key` and `seek_val` methods).
 
 // pub mod cursor_list;
-pub mod cursor_pair;
 pub mod cursor_list;
+pub mod cursor_pair;
 
 pub use self::cursor_list::CursorList;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor<K, V, T, R> {
-
+pub trait Cursor<K, V, T, R>
+where
+    K: ?Sized,
+    V: ?Sized,
+{
     /// Type the cursor addresses data in.
     type Storage;
 
@@ -33,11 +36,19 @@ pub trait Cursor<K, V, T, R> {
 
     /// Returns a reference to the current key, if valid.
     fn get_key<'a>(&self, storage: &'a Self::Storage) -> Option<&'a K> {
-        if self.key_valid(storage) { Some(self.key(storage)) } else { None }
+        if self.key_valid(storage) {
+            Some(self.key(storage))
+        } else {
+            None
+        }
     }
     /// Returns a reference to the current value, if valid.
     fn get_val<'a>(&self, storage: &'a Self::Storage) -> Option<&'a V> {
-        if self.val_valid(storage) { Some(self.val(storage)) } else { None }
+        if self.val_valid(storage) {
+            Some(self.val(storage))
+        } else {
+            None
+        }
     }
 
     /// Applies `logic` to each pair of time and difference. Intended for mutation of the
@@ -61,7 +72,7 @@ pub trait Cursor<K, V, T, R> {
 }
 
 /// Debugging and testing utilities for Cursor.
-pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, R> {
+pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone>: Cursor<K, V, T, R> {
     /// Rewinds the cursor and outputs its contents to a Vec
     fn to_vec(&mut self, storage: &Self::Storage) -> Vec<((K, V), Vec<(T, R)>)> {
         let mut out = Vec::new();
@@ -73,7 +84,10 @@ pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, 
                 self.map_times(storage, |ts, r| {
                     kv_out.push((ts.clone(), r.clone()));
                 });
-                out.push(((self.key(storage).clone(), self.val(storage).clone()), kv_out));
+                out.push((
+                    (self.key(storage).clone(), self.val(storage).clone()),
+                    kv_out,
+                ));
                 self.step_val(storage);
             }
             self.step_key(storage);
@@ -82,4 +96,7 @@ pub trait CursorDebug<K: Clone, V: Clone, T: Clone, R: Clone> : Cursor<K, V, T, 
     }
 }
 
-impl<C, K: Clone, V: Clone, T: Clone, R: Clone> CursorDebug<K, V, T, R> for C where C: Cursor<K, V, T, R> { }
+impl<C, K: Clone, V: Clone, T: Clone, R: Clone> CursorDebug<K, V, T, R> for C where
+    C: Cursor<K, V, T, R>
+{
+}

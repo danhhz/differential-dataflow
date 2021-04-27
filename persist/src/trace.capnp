@@ -4,7 +4,8 @@
 struct Batch {
   lower @0 :UInt64;
   upper @1 :UInt64;
-  tuples @2 :List(Tuple);
+  since @2 :UInt64;
+  tuples @3 :List(Tuple);
 }
 
 struct Tuple {

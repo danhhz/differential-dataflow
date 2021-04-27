@@ -29,14 +29,14 @@ impl<'b> PBatch<'b> {
         let d = Description::new(
             Antichain::from_elem(b.get_lower()),
             Antichain::from_elem(b.get_upper()),
-            Antichain::from_elem(0), // WIP
+            Antichain::from_elem(b.get_since()),
         );
         let tuples = b.get_tuples()?;
         Ok(PBatch { d, tuples })
     }
 }
 
-impl<'b> BatchReader<Box<[u8]>, Box<[u8]>, u64, i64> for PBatch<'b> {
+impl<'b> BatchReader<[u8], [u8], u64, i64> for PBatch<'b> {
     type Cursor = PCursor<'b>;
 
     fn cursor(&self) -> Self::Cursor {
@@ -80,7 +80,7 @@ impl<'b> PCursor<'b> {
     }
 }
 
-impl<'b> Cursor<Box<[u8]>, Box<[u8]>, u64, i64> for PCursor<'b> {
+impl<'b> Cursor<[u8], [u8], u64, i64> for PCursor<'b> {
     type Storage = PBatch<'b>;
 
     fn key_valid(&self, storage: &Self::Storage) -> bool {
@@ -91,38 +91,29 @@ impl<'b> Cursor<Box<[u8]>, Box<[u8]>, u64, i64> for PCursor<'b> {
         PCursor::val_raw(self.off, storage).is_some()
     }
 
-    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Box<[u8]> {
+    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
         let key = PCursor::key_raw(self.off, storage).expect("invalid key");
-        // WIP remove this terrifying nikhil wizardry:
-        // https://codecrash.me/understanding-rust-slices
-        unsafe { &*(&key as *const &[u8] as *const Box<[u8]>) }
+        key
     }
 
-    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Box<[u8]> {
+    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
         let val = PCursor::val_raw(self.off, storage).expect("invalid val");
-        // WIP remove this terrifying nikhil wizardry:
-        // https://codecrash.me/understanding-rust-slices
-        unsafe { &*(&val as *const &[u8] as *const Box<[u8]>) }
+        val
     }
 
     fn map_times<L: FnMut(&u64, &i64)>(&mut self, storage: &Self::Storage, mut logic: L) {
-        // WIP do we need to rewind here? if so, is mutating self.off okay?
         let key = PCursor::key_raw(self.off, storage).expect("invalid key");
         let val = PCursor::val_raw(self.off, storage).expect("invalid val");
-        let mut off = self.off;
-        while PCursor::val_raw(off, storage) == Some(val)
-            && PCursor::key_raw(off, storage) == Some(key)
-        {
-            let tuple = storage.tuples.get(off);
-            eprintln!(
-                "{:?} {:?} {} {}",
-                std::str::from_utf8(key).unwrap(),
-                std::str::from_utf8(val).unwrap(),
-                tuple.get_ts(),
-                tuple.get_diff()
-            );
+        loop {
+            let tuple = storage.tuples.get(self.off);
             logic(&tuple.get_ts(), &tuple.get_diff());
-            off += 1;
+            if PCursor::val_raw(self.off + 1, storage) == Some(val)
+                && PCursor::key_raw(self.off + 1, storage) == Some(key)
+            {
+                self.off += 1;
+            } else {
+                break;
+            }
         }
     }
 
@@ -137,7 +128,7 @@ impl<'b> Cursor<Box<[u8]>, Box<[u8]>, u64, i64> for PCursor<'b> {
         }
     }
 
-    fn seek_key(&mut self, storage: &Self::Storage, key: &Box<[u8]>) {
+    fn seek_key(&mut self, storage: &Self::Storage, key: &[u8]) {
         // Copied with modifications from
         // https://doc.rust-lang.org/std/primitive.slice.html#method.binary_search_by
         let mut size = storage.tuples.len();
@@ -161,7 +152,8 @@ impl<'b> Cursor<Box<[u8]>, Box<[u8]>, u64, i64> for PCursor<'b> {
             size -= half;
         }
         // SAFETY: base is always in [0, size) because base <= mid.
-        let base_key = PCursor::key_raw(base, storage).expect("invalid key");
+        self.off = base;
+        let base_key = PCursor::key_raw(self.off, storage).expect("invalid key");
         let cmp = base_key.cmp(key);
         if cmp == cmp::Ordering::Equal {
             // We found the key but we're not guaranteed to have the first one,
@@ -176,7 +168,7 @@ impl<'b> Cursor<Box<[u8]>, Box<[u8]>, u64, i64> for PCursor<'b> {
         self.off += 1;
     }
 
-    fn seek_val(&mut self, _storage: &Self::Storage, _val: &Box<[u8]>) {
+    fn seek_val(&mut self, _storage: &Self::Storage, _val: &[u8]) {
         todo!()
     }
 
@@ -204,7 +196,6 @@ mod tests {
     use super::*;
     use capnp::message::ReaderOptions;
     use capnp::serialize_packed;
-    use differential_dataflow::trace::cursor::CursorDebug;
 
     fn testdata() -> Vec<u8> {
         let mut message = ::capnp::message::Builder::new_default();
@@ -220,8 +211,8 @@ mod tests {
             };
             add_tuple(0, (b"a", b"val-a", 3, 1));
             add_tuple(1, (b"b", b"val-b", 1, 1));
-            add_tuple(1, (b"b", b"val-b", 4, 1));
-            add_tuple(2, (b"c", b"val-c", 2, 1));
+            add_tuple(2, (b"b", b"val-b", 4, 1));
+            add_tuple(3, (b"c", b"val-c", 2, 1));
         }
         let mut buf = vec![];
         serialize_packed::write_message(&mut buf, &message)
@@ -229,8 +220,25 @@ mod tests {
         buf
     }
 
-    fn to_box(buf: &[u8]) -> Box<[u8]> {
-        buf.to_vec().into_boxed_slice()
+    fn to_vec<'a, K: ?Sized, V: ?Sized, T: Clone, R: Clone, C: Cursor<K, V, T, R>>(
+        cursor: &mut C,
+        storage: &'a C::Storage,
+    ) -> Vec<((&'a K, &'a V), Vec<(T, R)>)> {
+        let mut out = Vec::new();
+        cursor.rewind_keys(storage);
+        cursor.rewind_vals(storage);
+        while cursor.key_valid(storage) {
+            while cursor.val_valid(storage) {
+                let mut kv_out = Vec::new();
+                cursor.map_times(storage, |ts, r| {
+                    kv_out.push((ts.clone(), r.clone()));
+                });
+                out.push(((cursor.key(storage), cursor.val(storage)), kv_out));
+                cursor.step_val(storage);
+            }
+            cursor.step_key(storage);
+        }
+        out
     }
 
     #[test]
@@ -241,20 +249,18 @@ mod tests {
         let b = message_reader.get_root::<capnpgen::batch::Reader>()?;
         let b = PBatch::from_reader(b)?;
         let mut c = b.cursor();
-        // WIP this SIGSEGVs but map_times is fine?
-        // let key = c.key(&b);
-        // assert_eq!("Ok()", format!("{:?}", key));
-        c.seek_key(&b, &to_box(b"b"));
+        assert_eq!(c.key(&b), &b"a"[..]);
+        assert_eq!(c.val(&b), &b"val-a"[..]);
+        c.seek_key(&b, &b"b"[..]);
+        assert_eq!(c.key(&b), &b"b"[..]);
+        assert_eq!(c.val(&b), &b"val-b"[..]);
         assert_eq!(
-            format!("{:?}", c.to_vec(&b)),
-            format!(
-                "{:?}",
-                &[
-                    ((b"b", b"val-b"), vec![(1, 1)]),
-                    ((b"b", b"val-b"), vec![(4, 1)]),
-                    ((b"c", b"val-c"), vec![(2, 1)])
-                ]
-            )
+            to_vec(&mut c, &b),
+            &[
+                ((&b"a"[..], &b"val-a"[..]), vec![(3, 1)]),
+                ((&b"b"[..], &b"val-b"[..]), vec![(1, 1), (4, 1)]),
+                ((&b"c"[..], &b"val-c"[..]), vec![(2, 1)])
+            ]
         );
         Ok(())
     }
