@@ -1,6 +1,8 @@
 @0xf2757f551645f46c;
 
-# TODO: Should we reduce the redundant storage of keys somehow?
+# TODO: It's clear from initial benchmarking that this structure isn't what
+# we'll want. In addition to the duplication of key, etc data, there's more
+# runtime overhead to following the capnp pointers around. Revisit this.
 struct Batch {
   lower @0 :UInt64;
   upper @1 :UInt64;
