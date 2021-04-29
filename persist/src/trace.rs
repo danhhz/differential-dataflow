@@ -1,7 +1,9 @@
 //! Persistent implementations of trace datastructures.
 
 use std::cmp;
+use std::marker::PhantomData;
 
+use capnp::serialize;
 use differential_dataflow::trace::{BatchReader, Cursor, Description};
 use timely::progress::frontier::Antichain;
 
@@ -182,6 +184,305 @@ impl<'b> Cursor<[u8], [u8], u64, i64> for PCursor<'b> {
                 break;
             }
         }
+    }
+}
+
+pub struct ColumnarBatch<'a> {
+    len: u32,
+    d: Description<u64>,
+    key_data: &'a [u8],
+    key_data_offsets: ::capnp::primitive_list::Reader<'a, u32>,
+    val_data: &'a [u8],
+    val_data_offsets: ::capnp::primitive_list::Reader<'a, u32>,
+    timestamps: ::capnp::primitive_list::Reader<'a, u64>,
+    diffs: ::capnp::primitive_list::Reader<'a, i64>,
+
+    key_idx_by_idx: ::capnp::primitive_list::Reader<'a, u32>,
+    val_idx_by_idx: ::capnp::primitive_list::Reader<'a, u32>,
+}
+
+impl<'a> ColumnarBatch<'a> {
+    pub fn from_reader(
+        b: capnpgen::batch_columnar::Reader<'a>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let d = Description::new(
+            Antichain::from_elem(b.get_lower()),
+            Antichain::from_elem(b.get_upper()),
+            Antichain::from_elem(b.get_since()),
+        );
+        let diffs = b.get_diffs()?;
+        Ok(ColumnarBatch {
+            len: diffs.len(),
+            d,
+            key_data: b.get_key_data()?,
+            key_data_offsets: b.get_key_data_offsets()?,
+            val_data: b.get_val_data()?,
+            val_data_offsets: b.get_val_data_offsets()?,
+            timestamps: b.get_timestamps()?,
+            diffs: diffs,
+            key_idx_by_idx: b.get_key_idx_by_idx()?,
+            val_idx_by_idx: b.get_val_idx_by_idx()?,
+        })
+    }
+
+    fn key_raw(&self, idx: u32) -> &'a [u8] {
+        let key_idx = self.key_idx_by_idx.get(idx);
+        &self.key_data[self.key_data_offsets.get(key_idx) as usize
+            ..self.key_data_offsets.get(key_idx + 1) as usize]
+    }
+    fn val_raw(&self, idx: u32) -> &'a [u8] {
+        let val_idx = self.val_idx_by_idx.get(idx);
+        &self.val_data[self.val_data_offsets.get(val_idx) as usize
+            ..self.val_data_offsets.get(val_idx + 1) as usize]
+    }
+}
+
+impl<'a> IntoIterator for ColumnarBatch<'a> {
+    type Item = (&'a [u8], &'a [u8], u64, i64);
+
+    type IntoIter = ColumnarBatchIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ColumnarBatchIter { idx: 0, b: self }
+    }
+}
+
+pub struct ColumnarBatchIter<'a> {
+    idx: u32,
+    b: ColumnarBatch<'a>,
+}
+
+impl<'a> Iterator for ColumnarBatchIter<'a> {
+    type Item = (&'a [u8], &'a [u8], u64, i64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.b.diffs.len() {
+            return None;
+        }
+        let key = self.b.key_raw(self.idx);
+        let val = self.b.val_raw(self.idx);
+        let ts = self.b.timestamps.get(self.idx);
+        let diff = self.b.diffs.get(self.idx);
+        self.idx += 1;
+        Some((key, val, ts, diff))
+    }
+}
+
+impl<'a> BatchReader<[u8], [u8], u64, i64> for ColumnarBatch<'a> {
+    type Cursor = ColumnarBatchCursor<'a>;
+
+    fn cursor(&self) -> Self::Cursor {
+        ColumnarBatchCursor {
+            idx: 0,
+            phantom: PhantomData,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.diffs.len() as usize
+    }
+
+    fn description(&self) -> &Description<u64> {
+        &self.d
+    }
+}
+
+pub struct ColumnarBatchCursor<'b> {
+    idx: u32,
+    phantom: PhantomData<&'b ()>,
+}
+
+impl<'b> Cursor<[u8], [u8], u64, i64> for ColumnarBatchCursor<'b> {
+    type Storage = ColumnarBatch<'b>;
+
+    fn key_valid(&self, storage: &Self::Storage) -> bool {
+        self.idx < storage.len
+    }
+
+    fn val_valid(&self, storage: &Self::Storage) -> bool {
+        self.idx < storage.len
+    }
+
+    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
+        storage.key_raw(self.idx)
+    }
+
+    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
+        storage.val_raw(self.idx)
+    }
+
+    fn map_times<L: FnMut(&u64, &i64)>(&mut self, _storage: &Self::Storage, _logic: L) {
+        todo!()
+    }
+
+    fn step_key(&mut self, _storage: &Self::Storage) {
+        self.idx += 1;
+    }
+
+    fn seek_key(&mut self, _storage: &Self::Storage, _key: &[u8]) {
+        todo!()
+    }
+
+    fn step_val(&mut self, _storage: &Self::Storage) {
+        todo!()
+    }
+
+    fn seek_val(&mut self, _storage: &Self::Storage, _val: &[u8]) {
+        todo!()
+    }
+
+    fn rewind_keys(&mut self, _storage: &Self::Storage) {
+        todo!()
+    }
+
+    fn rewind_vals(&mut self, _storage: &Self::Storage) {
+        todo!()
+    }
+}
+
+pub struct ColumnarBatchBuilder {
+    key_data: Vec<u8>,
+    key_data_offsets: Vec<u32>,
+    val_data: Vec<u8>,
+    val_data_offsets: Vec<u32>,
+    timestamps: Vec<u64>,
+    diffs: Vec<i64>,
+
+    key_idx_by_idx: Vec<u32>,
+    val_idx_by_idx: Vec<u32>,
+}
+
+fn fill_capnp_list<'a, T>(b: &mut ::capnp::primitive_list::Builder<'a, T>, xs: &[T])
+where
+    T: ::capnp::private::layout::PrimitiveElement + Copy,
+{
+    // TODO: Seriously? This is how I have to do this?
+    for (idx, x) in xs.iter().enumerate() {
+        b.set(idx as u32, *x);
+    }
+}
+
+impl ColumnarBatchBuilder {
+    pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        // TODO: This isn't the right way to use cap with keydata/valdata. Given
+        // that we've already sorted these, we should be able to right size them
+        // with some plumbing.
+        let mut ret = ColumnarBatchBuilder {
+            key_data: Vec::with_capacity(cap),
+            key_data_offsets: Vec::with_capacity(cap + 1),
+            val_data: Vec::with_capacity(cap),
+            val_data_offsets: Vec::with_capacity(cap + 1),
+            timestamps: Vec::with_capacity(cap),
+            diffs: Vec::with_capacity(cap),
+            key_idx_by_idx: Vec::with_capacity(cap),
+            val_idx_by_idx: Vec::with_capacity(cap),
+        };
+        ret.key_data_offsets.push(0);
+        ret.val_data_offsets.push(0);
+        ret
+    }
+
+    fn key_last(&self) -> Option<&[u8]> {
+        if self.key_data_offsets.len() < 2 {
+            None
+        } else {
+            Some(
+                &self.key_data[self.key_data_offsets[self.key_data_offsets.len() - 2] as usize
+                    ..self.key_data_offsets[self.key_data_offsets.len() - 1] as usize],
+            )
+        }
+    }
+
+    fn val_last(&self) -> Option<&[u8]> {
+        if self.val_data_offsets.len() < 2 {
+            None
+        } else {
+            Some(
+                &self.val_data[self.val_data_offsets[self.val_data_offsets.len() - 2] as usize
+                    ..self.val_data_offsets[self.val_data_offsets.len() - 1] as usize],
+            )
+        }
+    }
+
+    pub fn push(&mut self, element: (Vec<u8>, Vec<u8>, u64, i64)) {
+        let (key, val, ts, diff) = element;
+
+        self.key_idx_by_idx.push(self.key_data_offsets.len() as u32);
+        if Some(&key[..]) != self.key_last() {
+            self.key_data.extend(key);
+            self.key_data_offsets.push(self.key_data.len() as u32);
+        }
+
+        self.val_idx_by_idx.push(self.val_data_offsets.len() as u32);
+        if Some(&val[..]) != self.val_last() {
+            self.val_data.extend(val);
+            self.val_data_offsets.push(self.val_data.len() as u32);
+        }
+
+        self.timestamps.push(ts);
+        self.diffs.push(diff);
+    }
+
+    pub fn done(self, lower: u64, upper: u64, since: u64) -> Vec<u8> {
+        // WIP: We can compute the size ahead of time so this ends up being a
+        // single segment message in a single pass.
+        let mut message = ::capnp::message::Builder::new_default();
+        {
+            let mut batch = message.init_root::<capnpgen::batch_columnar::Builder>();
+            batch.set_lower(lower);
+            batch.set_upper(upper);
+            batch.set_since(since);
+            batch
+                .reborrow()
+                .init_key_data(self.key_data.len() as u32)
+                .copy_from_slice(&self.key_data);
+            batch
+                .reborrow()
+                .init_val_data(self.val_data.len() as u32)
+                .copy_from_slice(&self.val_data);
+            fill_capnp_list(
+                &mut batch
+                    .reborrow()
+                    .init_key_data_offsets(self.key_data_offsets.len() as u32),
+                &self.key_data_offsets,
+            );
+            fill_capnp_list(
+                &mut batch
+                    .reborrow()
+                    .init_val_data_offsets(self.val_data_offsets.len() as u32),
+                &self.val_data_offsets,
+            );
+            fill_capnp_list(
+                &mut batch
+                    .reborrow()
+                    .init_timestamps(self.timestamps.len() as u32),
+                &self.timestamps,
+            );
+            fill_capnp_list(
+                &mut batch.reborrow().init_diffs(self.diffs.len() as u32),
+                &self.diffs,
+            );
+            fill_capnp_list(
+                &mut batch
+                    .reborrow()
+                    .init_key_idx_by_idx(self.key_idx_by_idx.len() as u32),
+                &self.key_idx_by_idx,
+            );
+            fill_capnp_list(
+                &mut batch
+                    .reborrow()
+                    .init_val_idx_by_idx(self.val_idx_by_idx.len() as u32),
+                &self.val_idx_by_idx,
+            );
+        }
+        // WIP: Assert that this message is canonically encoded.
+        let mut buf = vec![];
+        serialize::write_message(&mut buf, &message).expect("writes to Vec<u8> are infallable");
+        buf
     }
 }
 
