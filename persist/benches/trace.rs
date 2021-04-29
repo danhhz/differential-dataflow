@@ -1,6 +1,6 @@
 //! Benchmarks for capnp based batch persistence.
 
-use capnp::message::ReaderOptions;
+use capnp::message::{HeapAllocator, ReaderOptions};
 use capnp::serialize_packed;
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -26,22 +26,29 @@ fn gen_tuples<F: FnMut(u32, String, String, u64, i64)>(tuples: u32, mut set_tupl
 
 fn gen_capnp(tuples: u32) -> Vec<u8> {
     let mut message = ::capnp::message::Builder::new_default();
-    {
-        let batch = message.init_root::<capnpgen::batch::Builder>();
-        let mut t = batch.init_tuples(tuples as u32);
-        gen_tuples(
-            tuples,
-            |idx: u32, key: String, val: String, ts: u64, diff: i64| {
-                let mut tuple = t.reborrow().get(idx);
-                tuple.set_key(key.as_bytes());
-                tuple.set_val(val.as_bytes());
-                tuple.set_ts(ts);
-                tuple.set_diff(diff);
-            },
-        );
-    }
+    let mut batch = message.init_root::<capnpgen::batch::Builder>();
+    let mut t = batch.reborrow().init_tuples(tuples as u32);
+    gen_tuples(
+        tuples,
+        |idx: u32, key: String, val: String, ts: u64, diff: i64| {
+            let mut tuple = t.reborrow().get(idx);
+            tuple.set_key(key.as_bytes());
+            tuple.set_val(val.as_bytes());
+            tuple.set_ts(ts);
+            tuple.set_diff(diff);
+        },
+    );
+    // Canonicalize on write so we don't need the far pointer jumps on read.
+    let batch = batch.into_reader();
+    let mut canonical = ::capnp::message::Builder::new(
+        HeapAllocator::new().first_segment_words(batch.total_size().unwrap().word_count as u32),
+    );
+    canonical
+        .set_root_canonical(batch)
+        .expect("guaranteed valid message");
     let mut buf = vec![];
-    serialize_packed::write_message(&mut buf, &message).expect("writes to Vec<u8> are infallable");
+    serialize_packed::write_message(&mut buf, &canonical)
+        .expect("writes to Vec<u8> are infallable");
     buf
 }
 
