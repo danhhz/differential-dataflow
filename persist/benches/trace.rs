@@ -3,7 +3,6 @@
 use capnp::message::ReaderOptions;
 use capnp::serialize_packed;
 use criterion::{criterion_group, criterion_main, Criterion};
-use pprof::criterion::{Output, PProfProfiler};
 
 use differential_dataflow::trace::implementations::ord::{OrdValBatch, OrdValBuilder};
 use differential_dataflow::trace::{BatchReader, Builder, Cursor};
@@ -64,7 +63,7 @@ fn gen_mem(tuples: u32) -> OrdValBatch<String, String, u64, i64, u32> {
 fn capnp_benchmark(c: &mut Criterion) {
     let batch = gen_capnp(1000000);
 
-    c.bench_function("decode", |b| {
+    c.bench_function("capnp_decode", |b| {
         b.iter(|| {
             let message_reader =
                 serialize_packed::read_message(&mut &batch[..], ReaderOptions::new()).unwrap();
@@ -84,13 +83,13 @@ fn capnp_benchmark(c: &mut Criterion) {
         .get_root::<capnpgen::batch::Reader>()
         .unwrap();
     let batch = PBatch::from_reader(batch).unwrap();
-    c.bench_function("get_key", |b| {
+    c.bench_function("capnp_get_key", |b| {
         b.iter(|| {
             let c = batch.cursor();
             assert!(c.get_key(&batch).is_some());
         })
     });
-    c.bench_function("seek_key", |b| {
+    c.bench_function("capnp_seek_key", |b| {
         b.iter(|| {
             let mut c = batch.cursor();
             c.seek_key(&batch, &b"0000b"[..]);
@@ -102,13 +101,13 @@ fn capnp_benchmark(c: &mut Criterion) {
 fn mem_benchmark(c: &mut Criterion) {
     let batch = gen_mem(1000000);
 
-    c.bench_function("get_key", |b| {
+    c.bench_function("mem_get_key", |b| {
         b.iter(|| {
             let c = batch.cursor();
             assert!(c.get_key(&batch).is_some());
         })
     });
-    c.bench_function("seek_key", |b| {
+    c.bench_function("mem_seek_key", |b| {
         b.iter(|| {
             let mut c = batch.cursor();
             c.seek_key(&batch, &"0000b".to_string());
@@ -119,7 +118,7 @@ fn mem_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = benches;
-    config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    config = Criterion::default();
     targets = capnp_benchmark, mem_benchmark
 }
 criterion_main!(benches);
