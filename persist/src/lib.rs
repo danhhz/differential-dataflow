@@ -3,9 +3,14 @@
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::CursorList;
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Concat, Operator, ToStream};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::Antichain;
 
 use crate::storage::sqlite::SQLiteManager;
 
@@ -51,6 +56,11 @@ pub trait Persister {
         &mut self,
         id: u64,
     ) -> Result<(PersistableStream, PersistableMeta), Box<dyn Error>>;
+
+    fn arranged<G>(&self, scope: G, id: u64) -> Arranged<G, PersistedTraceReader>
+    where
+        G: Scope,
+        G::Timestamp: Lattice + Ord;
 }
 
 pub trait PersistedStreamWrite {
@@ -66,6 +76,74 @@ pub trait PersistedStreamMeta {
     fn advance(&mut self, ts: u64);
     fn allow_compaction(&mut self, ts: u64);
     fn destroy(&mut self) -> Result<(), Box<dyn Error>>;
+}
+
+#[derive(Clone)]
+pub struct PersistedTraceReader {
+    logical_compaction: Antichain<u64>,
+    physical_compaction: Antichain<u64>,
+}
+
+impl TraceReader for PersistedTraceReader {
+    type Key = Vec<u8>;
+
+    type Val = ();
+
+    type Time = u64;
+
+    type R = i64;
+
+    type Batch = abom::AbomonatedBatch;
+
+    type Cursor = CursorList<
+        Vec<u8>,
+        (),
+        u64,
+        i64,
+        <abom::AbomonatedBatch as BatchReader<Vec<u8>, (), u64, i64>>::Cursor,
+    >;
+
+    fn cursor_through(
+        &mut self,
+        upper: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) -> Option<(
+        Self::Cursor,
+        <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
+    )> {
+        todo!()
+    }
+
+    fn set_logical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        self.logical_compaction.clear();
+        self.logical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_logical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.logical_compaction.borrow()
+    }
+
+    fn set_physical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        debug_assert!(timely::PartialOrder::less_equal(
+            &self.physical_compaction.borrow(),
+            &frontier
+        ));
+        self.physical_compaction.clear();
+        self.physical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_physical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.physical_compaction.borrow()
+    }
+
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
+        todo!()
+    }
 }
 
 // NB: intentionally not Clone
@@ -141,6 +219,91 @@ where
 //         }
 //     }
 // }
+
+// WIP I couldn't get the types happy with the existing stuff so I had to make
+// these unfortunate wrappers
+mod abom {
+    use abomonation::abomonated::Abomonated;
+    use differential_dataflow::trace::abomonated_blanket_impls::AbomonatedBatchCursor;
+    use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
+    use differential_dataflow::trace::{BatchReader, Cursor};
+
+    pub struct AbomonatedBatch(Abomonated<OrdKeyBatch<Vec<u8>, u64, i64, usize>, Vec<u8>>);
+
+    impl Clone for AbomonatedBatch {
+        fn clone(&self) -> Self {
+            todo!()
+        }
+    }
+
+    impl BatchReader<Vec<u8>, (), u64, i64> for AbomonatedBatch {
+        type Cursor = AbomonatedCursor;
+
+        fn cursor(&self) -> Self::Cursor {
+            AbomonatedCursor(self.0.cursor())
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn description(&self) -> &differential_dataflow::trace::Description<u64> {
+            self.0.description()
+        }
+    }
+
+    pub struct AbomonatedCursor(
+        AbomonatedBatchCursor<Vec<u8>, (), u64, i64, OrdKeyBatch<Vec<u8>, u64, i64, usize>>,
+    );
+
+    impl Cursor<Vec<u8>, (), u64, i64> for AbomonatedCursor {
+        type Storage = AbomonatedBatch;
+
+        fn key_valid(&self, storage: &Self::Storage) -> bool {
+            self.0.key_valid(&storage.0)
+        }
+
+        fn val_valid(&self, storage: &Self::Storage) -> bool {
+            self.0.val_valid(&storage.0)
+        }
+
+        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
+            self.0.key(&storage.0)
+        }
+
+        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a () {
+            self.0.val(&storage.0)
+        }
+
+        fn map_times<L: FnMut(&u64, &i64)>(&mut self, storage: &Self::Storage, logic: L) {
+            self.0.map_times(&storage.0, logic)
+        }
+
+        fn step_key(&mut self, storage: &Self::Storage) {
+            self.0.step_key(&storage.0)
+        }
+
+        fn seek_key(&mut self, storage: &Self::Storage, key: &Vec<u8>) {
+            self.0.seek_key(&storage.0, key)
+        }
+
+        fn step_val(&mut self, storage: &Self::Storage) {
+            self.0.step_val(&storage.0)
+        }
+
+        fn seek_val(&mut self, storage: &Self::Storage, val: &()) {
+            self.0.seek_val(&storage.0, val)
+        }
+
+        fn rewind_keys(&mut self, storage: &Self::Storage) {
+            self.0.rewind_keys(&storage.0)
+        }
+
+        fn rewind_vals(&mut self, storage: &Self::Storage) {
+            self.0.rewind_vals(&storage.0)
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

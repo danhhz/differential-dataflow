@@ -42,6 +42,18 @@ impl Persister for SQLiteManager {
         });
         Ok((PersistableStream(writer, snapshot), PersistableMeta(meta)))
     }
+
+    fn arranged<G>(
+        &self,
+        _scope: G,
+        _id: u64,
+    ) -> differential_dataflow::operators::arrange::Arranged<G, crate::PersistedTraceReader>
+    where
+        G: timely::dataflow::Scope,
+        G::Timestamp: differential_dataflow::lattice::Lattice + Ord,
+    {
+        todo!()
+    }
 }
 
 #[derive(Clone)]

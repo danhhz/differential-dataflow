@@ -538,9 +538,7 @@ pub mod abomonated_blanket_impls {
 
     use super::{Batch, BatchReader, Batcher, Builder, Cursor, Description, Merger};
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R> + Abomonation> BatchReader<K, V, T, R>
-        for Abomonated<B, Vec<u8>>
-    {
+    impl<K, V, T, R, B: BatchReader<K, V, T, R>> BatchReader<K, V, T, R> for Abomonated<B, Vec<u8>> {
         /// The type used to enumerate the batch's contents.
         type Cursor = AbomonatedBatchCursor<K, V, T, R, B>;
         /// Acquires a cursor to the batch's contents.
@@ -573,7 +571,7 @@ pub mod abomonated_blanket_impls {
         }
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R> + Abomonation> Cursor<K, V, T, R>
+    impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R>
         for AbomonatedBatchCursor<K, V, T, R, B>
     {
         type Storage = Abomonated<B, Vec<u8>>;

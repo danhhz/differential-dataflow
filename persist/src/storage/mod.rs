@@ -121,6 +121,18 @@ impl Persister for BlobPersister {
         });
         Ok((PersistableStream(write, snap), PersistableMeta(meta)))
     }
+
+    fn arranged<G>(
+        &self,
+        scope: G,
+        id: u64,
+    ) -> differential_dataflow::operators::arrange::Arranged<G, crate::PersistedTraceReader>
+    where
+        G: timely::dataflow::Scope,
+        G::Timestamp: differential_dataflow::lattice::Lattice + Ord,
+    {
+        todo!()
+    }
 }
 
 pub struct BlobWrite {
