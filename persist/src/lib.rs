@@ -154,20 +154,20 @@ mod tests {
     use timely::dataflow::ProbeHandle;
     use timely::Config;
 
-    use crate::storage::file::{self, FileWal};
+    use crate::storage::file::{self, FileBuffer};
     use crate::storage::s3::{self, S3Blob};
-    use crate::storage::{Blob, BlobPersister, Wal};
+    use crate::storage::{Blob, BlobPersister, Buffer};
     use crate::{PersistUnarySync, Persister};
 
     #[test]
     fn persist_unary_sync() -> Result<(), Box<dyn Error>> {
         let blob = S3Blob::new(s3::Config {})?;
-        let wal = FileWal::new(file::Config {})?;
+        let buf = FileBuffer::new(file::Config {})?;
         let (send, recv) = mpsc::channel();
         let send = Arc::new(Mutex::new(send));
 
         // Initial dataflow
-        let (blob1, wal1) = (blob.clone(), wal.clone());
+        let (blob1, buf1) = (blob.clone(), buf.clone());
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
             let mut persist = None;
@@ -177,7 +177,7 @@ mod tests {
                 let send = send.lock().expect("WIP").clone();
                 let mut p = BlobPersister::new(
                     Box::new(blob1.clone()) as Box<dyn Blob>,
-                    Box::new(wal1.clone()) as Box<dyn Wal>,
+                    Box::new(buf1.clone()) as Box<dyn Buffer>,
                 )
                 .expect("WIP");
 
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(first_dataflow.iter().flat_map(|(_, x)| x).count(), 5);
 
         // Restart dataflow with existing data
-        let (blob2, wal2) = (blob.clone(), wal.clone());
+        let (blob2, buf2) = (blob.clone(), buf.clone());
         let (send, recv) = mpsc::channel();
         let send = Arc::new(Mutex::new(send));
         timely::execute(Config::thread(), move |worker| {
@@ -221,7 +221,7 @@ mod tests {
                 let send = send.lock().expect("WIP").clone();
                 let mut p = BlobPersister::new(
                     Box::new(blob2.clone()) as Box<dyn Blob>,
-                    Box::new(wal2.clone()) as Box<dyn Wal>,
+                    Box::new(buf2.clone()) as Box<dyn Buffer>,
                 )
                 .expect("WIP");
 

@@ -6,19 +6,19 @@ use std::sync::{Arc, Mutex};
 use abomonation;
 use abomonation_derive::Abomonation;
 
-use crate::storage::Wal;
+use crate::storage::Buffer;
 use crate::PersistedStreamSnapshot;
 
 pub struct Config {}
 
 #[derive(Clone)]
-pub struct FileWal {
+pub struct FileBuffer {
     dataz: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
-impl FileWal {
+impl FileBuffer {
     pub fn new(_c: Config) -> Result<Self, Box<dyn Error>> {
-        Ok(FileWal {
+        Ok(FileBuffer {
             dataz: Arc::new(Mutex::new(Vec::new())),
         })
     }
@@ -30,7 +30,7 @@ struct WalEntry {
     updates: Vec<(Vec<u8>, u64, i64)>,
 }
 
-impl Wal for FileWal {
+impl Buffer for FileBuffer {
     fn write_sync(
         &mut self,
         id: u64,

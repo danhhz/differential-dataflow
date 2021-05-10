@@ -24,7 +24,7 @@ pub trait Blob {
     fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), Box<dyn Error>>;
 }
 
-pub trait Wal {
+pub trait Buffer {
     fn write_sync(
         &mut self,
         id: u64,
@@ -49,7 +49,7 @@ struct BlobPersisterCore {
     batcher: <OrdKeyBatch<Vec<u8>, u64, i64, usize> as Batch<Vec<u8>, (), u64, i64>>::Batcher,
     blob_meta: BatchMeta,
     blob: Box<dyn Blob>,
-    wal: Box<dyn Wal>,
+    buf: Box<dyn Buffer>,
 }
 
 pub struct BlobPersister {
@@ -58,7 +58,7 @@ pub struct BlobPersister {
 }
 
 impl BlobPersister {
-    pub fn new(blob: Box<dyn Blob>, wal: Box<dyn Wal>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(blob: Box<dyn Blob>, buf: Box<dyn Buffer>) -> Result<Self, Box<dyn Error>> {
         let blob_meta = if let Some(mut buf) = blob.get("META".as_bytes())? {
             unsafe { decode::<BatchMeta>(&mut buf) }
                 .expect("WIP")
@@ -74,7 +74,7 @@ impl BlobPersister {
             <OrdKeyBatch<Vec<u8>, u64, i64, usize> as Batch<Vec<u8>, (), u64, i64>>::Batcher::new();
         let core = BlobPersisterCore {
             blob,
-            wal,
+            buf,
             blob_meta,
             batcher,
         };
@@ -109,7 +109,7 @@ impl Persister for BlobPersister {
         let snap = {
             let blob_snap = self.blob_snapshot()?;
             let core = self.core.lock().expect("WIP");
-            let wal_snap = core.wal.snapshot(id, blob_snap.frontier)?;
+            let wal_snap = core.buf.snapshot(id, blob_snap.frontier)?;
             Box::new(PairSnapshot {
                 s1: Box::new(blob_snap) as Box<dyn PersistedStreamSnapshot>,
                 s2: wal_snap,
@@ -131,7 +131,7 @@ pub struct BlobWrite {
 impl PersistedStreamWrite for BlobWrite {
     fn write_sync(&mut self, updates: &[(Vec<u8>, u64, i64)]) -> Result<(), Box<dyn Error>> {
         let mut core = self.core.lock().expect("WIP");
-        core.wal.write_sync(self.id, updates)?;
+        core.buf.write_sync(self.id, updates)?;
         // WIP well this is unfortunate
         let mut batcher_updates = updates
             .iter()
@@ -234,14 +234,14 @@ impl PersistedStreamSnapshot for PairSnapshot {
 mod tests {
     use std::error::Error;
 
-    use super::file::{self, FileWal};
+    use super::file::{self, FileBuffer};
     use super::s3::{self, S3Blob};
     use super::*;
 
     #[test]
     fn blob_persister() -> Result<(), Box<dyn Error>> {
         let blob = S3Blob::new(s3::Config {})?;
-        let wal = FileWal::new(file::Config {})?;
+        let buf = FileBuffer::new(file::Config {})?;
 
         let updates = vec![
             ("foo".as_bytes().to_vec(), 1, 1),
@@ -253,7 +253,7 @@ mod tests {
         {
             let mut p = BlobPersister::new(
                 Box::new(blob.clone()) as Box<dyn Blob>,
-                Box::new(wal.clone()) as Box<dyn Wal>,
+                Box::new(buf.clone()) as Box<dyn Buffer>,
             )?;
 
             let (PersistableStream(mut write, mut snap), mut meta) = p.create_or_load(1)?;
@@ -277,7 +277,7 @@ mod tests {
         {
             let mut p = BlobPersister::new(
                 Box::new(blob.clone()) as Box<dyn Blob>,
-                Box::new(wal.clone()) as Box<dyn Wal>,
+                Box::new(buf.clone()) as Box<dyn Buffer>,
             )?;
 
             let (PersistableStream(_write, mut snap), _meta) = p.create_or_load(1)?;
