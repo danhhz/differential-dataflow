@@ -77,8 +77,13 @@ impl PersistedStreamSnapshot for FileWalSnapshot {
             if self.id != entry.id {
                 continue;
             }
-            buf.extend_from_slice(&entry.updates[..]);
-            buf.retain(|(_, ts, _)| Some(*ts) > self.lower);
+            buf.extend(
+                entry
+                    .updates
+                    .iter()
+                    .filter(|(_, ts, _)| Some(*ts) >= self.lower)
+                    .cloned(),
+            );
             if buf.is_empty() {
                 continue;
             }

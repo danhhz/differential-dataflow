@@ -4,7 +4,7 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{Concat, Operator, ToStream};
 use timely::dataflow::{Scope, Stream};
 
 use crate::storage::sqlite::SQLiteManager;
@@ -86,12 +86,11 @@ where
     G: Scope<Timestamp = u64>,
 {
     fn persist_unary_sync(self, p: PersistableStream) -> Self {
-        let PersistableStream(mut w, _s) = p;
-        // WIP replay the snapshot into this stream too
+        let PersistableStream(mut w, mut s) = p;
         let mut buf = Vec::new();
-        self.unary_notify(
+        let capture = self.unary_notify(
             Pipeline,
-            "persist_sync",
+            "persist_sync_capture",
             None,
             move |input, output, notificator| {
                 input.for_each(|time, data| {
@@ -104,6 +103,149 @@ where
                     // WIP do something useful with this. what is the notificator contract again?
                 });
             },
-        )
+        );
+
+        let mut replay = Vec::new();
+        while s.read(&mut replay) {}
+        let replay = replay.into_iter().to_stream(&mut self.scope());
+        // let replay = vec![SnapshotIterator::new(s)].replay_core(&mut self.scope(), None);
+        replay.concat(&capture)
+    }
+}
+
+// struct SnapshotIterator {
+//     s: Box<dyn PersistedStreamSnapshot>,
+//     e: Option<Event<u64, (Vec<u8>, u64, i64)>>,
+// }
+
+// impl SnapshotIterator {
+//     fn new(s: Box<dyn PersistedStreamSnapshot>) -> Self {
+//         SnapshotIterator { s, e: None }
+//     }
+// }
+
+// impl EventIterator<u64, (Vec<u8>, u64, i64)> for SnapshotIterator {
+//     fn next(&mut self) -> Option<&Event<u64, (Vec<u8>, u64, i64)>> {
+//         let mut buf = vec![];
+//         loop {
+//             let more = self.s.read(&mut buf);
+//             eprintln!("WIP {}: {:?}", more, &buf);
+//             if buf.is_empty() && !more {
+//                 eprintln!("WIP all done");
+//                 return None;
+//             } else if buf.is_empty() {
+//                 continue;
+//             }
+//             self.e = Some(Event::Messages(0, buf));
+//             return Some(self.e.as_ref().unwrap());
+//         }
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::{mpsc, Arc, Mutex};
+
+    use differential_dataflow::input::InputSession;
+    use differential_dataflow::AsCollection;
+    use timely::dataflow::operators::capture::extract::Extract;
+    use timely::dataflow::operators::{Capture, Map, Probe};
+    use timely::dataflow::ProbeHandle;
+    use timely::Config;
+
+    use crate::storage::file::{self, FileWal};
+    use crate::storage::s3::{self, S3Blob};
+    use crate::storage::{Blob, BlobPersister, Wal};
+    use crate::{PersistUnarySync, Persister};
+
+    #[test]
+    fn persist_unary_sync() -> Result<(), Box<dyn Error>> {
+        let blob = S3Blob::new(s3::Config {})?;
+        let wal = FileWal::new(file::Config {})?;
+        let (send, recv) = mpsc::channel();
+        let send = Arc::new(Mutex::new(send));
+
+        // Initial dataflow
+        let (blob1, wal1) = (blob.clone(), wal.clone());
+        timely::execute(Config::thread(), move |worker| {
+            let mut input = InputSession::new();
+            let mut persist = None;
+
+            let probe = worker.dataflow(|scope| {
+                let mut probe = ProbeHandle::new();
+                let send = send.lock().expect("WIP").clone();
+                let mut p = BlobPersister::new(
+                    Box::new(blob1.clone()) as Box<dyn Blob>,
+                    Box::new(wal1.clone()) as Box<dyn Wal>,
+                )
+                .expect("WIP");
+
+                let (stream, meta) = p.create_or_load(1).expect("WIP");
+                persist = Some(meta);
+                let manages = input
+                    .to_collection(scope) // TODO: Get rid of these 2 maps
+                    .inner
+                    .map(|(row, ts, diff): (Vec<u8>, u64, isize)| (row, ts, diff as i64))
+                    .persist_unary_sync(stream)
+                    .map(|(row, ts, diff): (Vec<u8>, u64, i64)| (row, ts, diff as isize))
+                    .probe_with(&mut probe)
+                    .as_collection();
+
+                manages.inner.capture_into(send);
+                probe
+            });
+            input.advance_to(0);
+            for person in 1..=5 {
+                input.insert(format!("person {}", person).into_bytes());
+                input.advance_to(person);
+                input.flush();
+            }
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+            persist.unwrap().0.advance(3);
+        })?;
+
+        let first_dataflow = recv.extract();
+        // Sanity check
+        assert_eq!(first_dataflow.iter().flat_map(|(_, x)| x).count(), 5);
+
+        // Restart dataflow with existing data
+        let (blob2, wal2) = (blob.clone(), wal.clone());
+        let (send, recv) = mpsc::channel();
+        let send = Arc::new(Mutex::new(send));
+        timely::execute(Config::thread(), move |worker| {
+            let mut input = InputSession::new();
+            worker.dataflow(|scope| {
+                let send = send.lock().expect("WIP").clone();
+                let mut p = BlobPersister::new(
+                    Box::new(blob2.clone()) as Box<dyn Blob>,
+                    Box::new(wal2.clone()) as Box<dyn Wal>,
+                )
+                .expect("WIP");
+
+                let (stream, _meta) = p.create_or_load(1).expect("WIP");
+                let manages = input
+                    .to_collection(scope) // TODO: Get rid of these 2 maps
+                    .inner
+                    .map(|(row, ts, diff): (Vec<u8>, u64, isize)| (row, ts, diff as i64))
+                    .persist_unary_sync(stream)
+                    .map(|(row, ts, diff): (Vec<u8>, u64, i64)| (row, ts, diff as isize))
+                    .as_collection();
+
+                manages.inner.capture_into(send);
+            });
+            input.advance_to(5);
+            for person in 6..=8 {
+                input.insert(format!("person {}", person).into_bytes());
+                input.advance_to(person);
+            }
+        })?;
+
+        let second_dataflow = recv.extract();
+        assert_eq!(second_dataflow.iter().flat_map(|(_, x)| x).count(), 8);
+
+        Ok(())
     }
 }

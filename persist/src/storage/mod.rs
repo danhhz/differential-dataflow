@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use abomonation::{decode, encode};
 use abomonation_derive::Abomonation;
 use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
-use differential_dataflow::trace::{Batch, BatchReader, Batcher};
+use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor};
 use timely::progress::Antichain;
 
 use crate::{
@@ -82,6 +82,19 @@ impl BlobPersister {
             core: Arc::new(Mutex::new(core)),
         })
     }
+
+    fn blob_snapshot(&self) -> Result<BlobSnapshot, Box<dyn Error>> {
+        let core = self.core.lock().expect("WIP");
+        let mut batches = Vec::new();
+        for key in core.blob_meta.batch_keys.iter() {
+            batches.push(core.blob.get(key.as_bytes())?.expect("WIP"));
+        }
+        let snap = BlobSnapshot {
+            frontier: core.blob_meta.frontier,
+            batches,
+        };
+        Ok(snap)
+    }
 }
 
 impl Persister for BlobPersister {
@@ -94,11 +107,14 @@ impl Persister for BlobPersister {
             core: self.core.clone(),
         }) as Box<dyn PersistedStreamWrite>;
         let snap = {
+            let blob_snap = self.blob_snapshot()?;
             let core = self.core.lock().expect("WIP");
-            let blob_frontier = core.blob_meta.frontier;
-            // WIP also play back the values in blob
-            core.wal.snapshot(id, blob_frontier)
-        }?;
+            let wal_snap = core.wal.snapshot(id, blob_snap.frontier)?;
+            Box::new(PairSnapshot {
+                s1: Box::new(blob_snap) as Box<dyn PersistedStreamSnapshot>,
+                s2: wal_snap,
+            }) as Box<dyn PersistedStreamSnapshot>
+        };
         let meta = Box::new(BlobMeta {
             id,
             core: self.core.clone(),
@@ -114,11 +130,15 @@ pub struct BlobWrite {
 
 impl PersistedStreamWrite for BlobWrite {
     fn write_sync(&mut self, updates: &[(Vec<u8>, u64, i64)]) -> Result<(), Box<dyn Error>> {
-        self.core
-            .lock()
-            .expect("WIP")
-            .wal
-            .write_sync(self.id, updates)
+        let mut core = self.core.lock().expect("WIP");
+        core.wal.write_sync(self.id, updates)?;
+        // WIP well this is unfortunate
+        let mut batcher_updates = updates
+            .iter()
+            .map(|(k, t, r)| ((k.clone(), ()), *t, *r))
+            .collect();
+        core.batcher.push_batch(&mut batcher_updates);
+        Ok(())
     }
 }
 
@@ -167,6 +187,49 @@ impl PersistedStreamMeta for BlobMeta {
     }
 }
 
+struct BlobSnapshot {
+    frontier: Option<u64>,
+    // TODO: This should just be a cursor.
+    batches: Vec<Vec<u8>>,
+}
+
+impl PersistedStreamSnapshot for BlobSnapshot {
+    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+        let mut bytes = if let Some(bytes) = self.batches.pop() {
+            bytes
+        } else {
+            return false;
+        };
+        let (batch, _) =
+            unsafe { decode::<OrdKeyBatch<Vec<u8>, u64, i64, usize>>(&mut bytes) }.expect("WIP");
+        let mut cursor = batch.cursor();
+        cursor.rewind_keys(batch);
+        cursor.rewind_vals(batch);
+        while cursor.key_valid(batch) {
+            while cursor.val_valid(batch) {
+                let key = cursor.key(batch);
+                cursor.map_times(batch, |ts, r| {
+                    buf.push((key.clone(), ts.clone(), r.clone()));
+                });
+                cursor.step_val(batch);
+            }
+            cursor.step_key(batch);
+        }
+        true
+    }
+}
+
+struct PairSnapshot {
+    s1: Box<dyn PersistedStreamSnapshot>,
+    s2: Box<dyn PersistedStreamSnapshot>,
+}
+
+impl PersistedStreamSnapshot for PairSnapshot {
+    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+        self.s1.read(buf) || self.s2.read(buf)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -186,7 +249,7 @@ mod tests {
             ("bar".as_bytes().to_vec(), 2, 1),
         ];
 
-        // Initial start
+        // Initial dataflow
         {
             let mut p = BlobPersister::new(
                 Box::new(blob.clone()) as Box<dyn Blob>,
@@ -210,7 +273,7 @@ mod tests {
             assert!(blob.entries() > 0);
         }
 
-        // Restart with existing data
+        // Restart dataflow with existing data
         {
             let mut p = BlobPersister::new(
                 Box::new(blob.clone()) as Box<dyn Blob>,
