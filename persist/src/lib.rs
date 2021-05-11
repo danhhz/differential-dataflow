@@ -5,16 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::CursorList;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Concat, Operator, ToStream};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
-use timely::PartialOrder;
 
-use crate::abom::AbomonatedBatch;
 use crate::storage::sqlite::SQLiteManager;
+use crate::storage::PersistedTraceReader;
 
 pub mod storage;
 pub mod trace;
@@ -81,96 +77,6 @@ pub trait PersistedStreamMeta {
     fn advance(&mut self, ts: u64);
     fn allow_compaction(&mut self, ts: u64);
     fn destroy(&mut self) -> Result<(), Box<dyn Error>>;
-}
-
-#[derive(Clone)]
-pub struct PersistedTraceReader {
-    batches: Vec<AbomonatedBatch>,
-    logical_compaction: Antichain<u64>,
-    physical_compaction: Antichain<u64>,
-}
-
-impl PersistedTraceReader {
-    fn new(batches: Vec<AbomonatedBatch>) -> Self {
-        PersistedTraceReader {
-            batches,
-            logical_compaction: Antichain::new(),
-            physical_compaction: Antichain::new(),
-        }
-    }
-}
-
-impl TraceReader for PersistedTraceReader {
-    type Key = Vec<u8>;
-
-    type Val = Vec<u8>;
-
-    type Time = u64;
-
-    type R = isize;
-
-    type Batch = AbomonatedBatch;
-
-    type Cursor = CursorList<
-        Vec<u8>,
-        Vec<u8>,
-        u64,
-        isize,
-        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
-    >;
-
-    fn cursor_through(
-        &mut self,
-        upper: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) -> Option<(
-        Self::Cursor,
-        <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
-    )> {
-        // WIP check this filter condition. also sanity check that the batches
-        // line up with no holes
-        let storage = self
-            .batches
-            .iter()
-            .filter(|b| PartialOrder::less_equal(&b.upper().borrow(), &upper))
-            .cloned()
-            .collect::<Vec<_>>();
-        let cursors = storage.iter().map(|b| b.cursor()).collect();
-        Some((CursorList::new(cursors, &storage), storage))
-    }
-
-    fn set_logical_compaction(
-        &mut self,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) {
-        self.logical_compaction.clear();
-        self.logical_compaction.extend(frontier.iter().cloned());
-    }
-
-    fn get_logical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
-        self.logical_compaction.borrow()
-    }
-
-    fn set_physical_compaction(
-        &mut self,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) {
-        debug_assert!(timely::PartialOrder::less_equal(
-            &self.physical_compaction.borrow(),
-            &frontier
-        ));
-        self.physical_compaction.clear();
-        self.physical_compaction.extend(frontier.iter().cloned());
-    }
-
-    fn get_physical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
-        self.physical_compaction.borrow()
-    }
-
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
-        for batch in self.batches.iter() {
-            f(batch)
-        }
-    }
 }
 
 // NB: intentionally not Clone
@@ -350,6 +256,8 @@ mod tests {
 
     use differential_dataflow::input::InputSession;
     use differential_dataflow::operators::Join;
+    use differential_dataflow::trace::cursor::CursorDebug;
+    use differential_dataflow::trace::BatchReader;
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::capture::extract::Extract;
     use timely::dataflow::operators::{Capture, Map, Probe};
@@ -469,20 +377,20 @@ mod tests {
     fn arrangement() -> Result<(), Box<dyn Error>> {
         let blob = S3Blob::new(s3::Config {})?;
         let buf = FileBuffer::new(file::Config {})?;
-        // let (send, recv) = mpsc::channel();
-        // let send = Arc::new(Mutex::new(send));
+        let (send, recv) = mpsc::channel();
+        let send = Arc::new(Mutex::new(send));
 
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
-            worker.dataflow(|scope| {
+            let (p, mut meta, probe) = worker.dataflow(|scope| {
                 let mut p = BlobPersister::new(
                     Box::new(blob.clone()) as Box<dyn Blob>,
                     Box::new(buf.clone()) as Box<dyn Buffer>,
                 )
                 .expect("WIP");
-                let (stream, _meta) = p.create_or_load(1).expect("WIP");
+                let (stream, meta) = p.create_or_load(1).expect("WIP");
 
-                let manages = input
+                let probe = input
                     .to_collection(scope)
                     .inner
                     .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
@@ -492,22 +400,72 @@ mod tests {
                     .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
                         ((key, val), ts, diff as isize)
                     })
-                    .as_collection();
-                let manages_arranged = p.arranged(scope.clone(), 1);
-                let managed = manages.map(|(m2, m1)| (m1, m2));
-                manages_arranged
-                    .join(&managed)
-                    .inspect(|x| println!("{:?}", x));
+                    .as_collection()
+                    .probe();
+                (p, meta, probe)
             });
-            let size = 10;
+
             input.advance_to(0);
-            for person in 0..size {
+            for person in 0..10 {
                 input.insert((
                     (person / 2).to_string().into_bytes(),
                     (person).to_string().into_bytes(),
                 ));
             }
+            input.advance_to(10);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
+            meta.0.advance(10);
+            assert!(blob.entries() > 0);
+
+            worker.dataflow(|scope| {
+                let send = send.lock().expect("WIP").clone();
+                let manages_arranged = p.arranged(scope.clone(), 1);
+                let manages = manages_arranged
+                    .stream
+                    .flat_map(|b| {
+                        let mut cursor = b.cursor();
+                        cursor.to_vec(&b).into_iter().flat_map(|((k, v), trs)| {
+                            trs.into_iter()
+                                .map(move |(t, r)| ((k.clone(), v.clone()), t, r))
+                        })
+                    })
+                    .as_collection();
+                let managed = manages.map(|(m2, m1)| (m1, m2));
+                manages_arranged.join(&managed).inner.capture_into(send);
+            });
         })?;
+
+        let captured = recv.extract();
+        let captured = captured.iter().flat_map(|(_, x)| x).collect::<Vec<_>>();
+        let expected = vec![
+            (("0", ("0", "0")), 0, 1),
+            (("0", ("0", "1")), 0, 1),
+            (("1", ("0", "2")), 0, 1),
+            (("1", ("0", "3")), 0, 1),
+            (("2", ("1", "4")), 0, 1),
+            (("2", ("1", "5")), 0, 1),
+            (("3", ("1", "6")), 0, 1),
+            (("3", ("1", "7")), 0, 1),
+            (("4", ("2", "8")), 0, 1),
+            (("4", ("2", "9")), 0, 1),
+        ]
+        .into_iter()
+        .map(|((x, (y, z)), t, r)| {
+            let (x, y, z) = (
+                x.to_string().into_bytes(),
+                y.to_string().into_bytes(),
+                z.to_string().into_bytes(),
+            );
+            // Swap z and y to match the dd book since we had the wrong
+            // thing arranged for join_core.
+            ((x, (z, y)), t as u64, r as isize)
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(format!("{:?}", captured), format!("{:?}", expected));
+
         Ok(())
     }
 }

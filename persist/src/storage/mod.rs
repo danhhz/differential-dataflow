@@ -9,16 +9,19 @@ use abomonation::{decode, encode};
 use abomonation_derive::Abomonation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::CursorList;
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor};
+use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor, TraceReader};
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
+use timely::progress::Timestamp;
+use timely::PartialOrder;
 
 use crate::abom::AbomonatedBatch;
 use crate::{
     PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
-    PersistedStreamWrite, PersistedTraceReader, Persister,
+    PersistedStreamWrite, Persister,
 };
 
 // WIP: feature gate the following
@@ -165,15 +168,20 @@ impl Persister for BlobPersister {
         G: Scope,
         G::Timestamp: Lattice + Ord,
     {
-        let mut core = self.core.lock().expect("WIP");
-        // WIP unfortunate extra clone
-        let batch_keys = core.blob_meta.batch_keys.clone();
-        let batches = batch_keys
-            .iter()
-            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
-            .collect::<Vec<_>>();
-        let stream = batches.clone().to_stream(&mut scope);
-        let trace = PersistedTraceReader::new(batches);
+        let stream = {
+            // WIP this needs to be an operator so it doesn't just snapshot
+            let mut core = self.core.lock().expect("WIP");
+            // WIP unfortunate extra clone
+            let batch_keys = core.blob_meta.batch_keys.clone();
+            // WIP check this filter condition. also sanity check that the batches
+            // line up with no holes
+            let batches = batch_keys
+                .iter()
+                .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
+                .collect::<Vec<_>>();
+            batches.to_stream(&mut scope)
+        };
+        let trace = PersistedTraceReader::new(self.core.clone());
         Arranged { stream, trace }
     }
 }
@@ -282,6 +290,104 @@ struct PairSnapshot {
 impl PersistedStreamSnapshot for PairSnapshot {
     fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         self.s1.read(buf) || self.s2.read(buf)
+    }
+}
+
+#[derive(Clone)]
+pub struct PersistedTraceReader {
+    core: Arc<Mutex<BlobPersisterCore>>,
+    logical_compaction: Antichain<u64>,
+    physical_compaction: Antichain<u64>,
+}
+
+impl PersistedTraceReader {
+    fn new(core: Arc<Mutex<BlobPersisterCore>>) -> Self {
+        PersistedTraceReader {
+            core,
+            logical_compaction: Antichain::from_elem(u64::minimum()),
+            physical_compaction: Antichain::from_elem(u64::minimum()),
+        }
+    }
+}
+
+impl TraceReader for PersistedTraceReader {
+    type Key = Vec<u8>;
+
+    type Val = Vec<u8>;
+
+    type Time = u64;
+
+    type R = isize;
+
+    type Batch = AbomonatedBatch;
+
+    type Cursor = CursorList<
+        Vec<u8>,
+        Vec<u8>,
+        u64,
+        isize,
+        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
+    >;
+
+    fn cursor_through(
+        &mut self,
+        upper: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) -> Option<(
+        Self::Cursor,
+        <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
+    )> {
+        let mut core = self.core.lock().expect("WIP");
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        // WIP check this filter condition. also sanity check that the batches
+        // line up with no holes
+        let storage = batch_keys
+            .iter()
+            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
+            .filter(|b| PartialOrder::less_equal(&b.upper().borrow(), &upper))
+            .collect::<Vec<_>>();
+        let cursors = storage.iter().map(|b| b.cursor()).collect();
+        Some((CursorList::new(cursors, &storage), storage))
+    }
+
+    fn set_logical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        self.logical_compaction.clear();
+        self.logical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_logical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.logical_compaction.borrow()
+    }
+
+    fn set_physical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        debug_assert!(timely::PartialOrder::less_equal(
+            &self.physical_compaction.borrow(),
+            &frontier
+        ));
+        self.physical_compaction.clear();
+        self.physical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_physical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.physical_compaction.borrow()
+    }
+
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+        let mut core = self.core.lock().expect("WIP");
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        let batches = batch_keys
+            .iter()
+            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"));
+        for batch in batches {
+            f(&batch)
+        }
     }
 }
 
