@@ -107,7 +107,7 @@ impl TraceReader for PersistedTraceReader {
 
     type Time = u64;
 
-    type R = i64;
+    type R = isize;
 
     type Batch = AbomonatedBatch;
 
@@ -115,8 +115,8 @@ impl TraceReader for PersistedTraceReader {
         Vec<u8>,
         Vec<u8>,
         u64,
-        i64,
-        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, i64>>::Cursor,
+        isize,
+        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
     >;
 
     fn cursor_through(
@@ -267,7 +267,7 @@ mod abom {
         }
     }
 
-    impl BatchReader<Vec<u8>, Vec<u8>, u64, i64> for AbomonatedBatch {
+    impl BatchReader<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedBatch {
         type Cursor = AbomonatedCursor;
 
         fn cursor(&self) -> Self::Cursor {
@@ -293,7 +293,7 @@ mod abom {
         >,
     );
 
-    impl Cursor<Vec<u8>, Vec<u8>, u64, i64> for AbomonatedCursor {
+    impl Cursor<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedCursor {
         type Storage = AbomonatedBatch;
 
         fn key_valid(&self, storage: &Self::Storage) -> bool {
@@ -312,8 +312,9 @@ mod abom {
             self.0.val(&storage.0)
         }
 
-        fn map_times<L: FnMut(&u64, &i64)>(&mut self, storage: &Self::Storage, logic: L) {
-            self.0.map_times(&storage.0, logic)
+        fn map_times<L: FnMut(&u64, &isize)>(&mut self, storage: &Self::Storage, mut logic: L) {
+            self.0
+                .map_times(&storage.0, |t, r| logic(t, &(*r as isize)))
         }
 
         fn step_key(&mut self, storage: &Self::Storage) {
@@ -466,13 +467,36 @@ mod tests {
 
     #[test]
     fn arrangement() -> Result<(), Box<dyn Error>> {
+        let blob = S3Blob::new(s3::Config {})?;
+        let buf = FileBuffer::new(file::Config {})?;
+        // let (send, recv) = mpsc::channel();
+        // let send = Arc::new(Mutex::new(send));
+
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
             worker.dataflow(|scope| {
-                let manages = input.to_collection(scope);
-                manages
-                    .map(|(m2, m1)| (m1, m2))
-                    .join(&manages)
+                let mut p = BlobPersister::new(
+                    Box::new(blob.clone()) as Box<dyn Blob>,
+                    Box::new(buf.clone()) as Box<dyn Buffer>,
+                )
+                .expect("WIP");
+                let (stream, _meta) = p.create_or_load(1).expect("WIP");
+
+                let manages = input
+                    .to_collection(scope)
+                    .inner
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
+                        ((key, val), ts, diff as i64)
+                    })
+                    .persist_unary_sync(stream)
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
+                        ((key, val), ts, diff as isize)
+                    })
+                    .as_collection();
+                let manages_arranged = p.arranged(scope.clone(), 1);
+                let managed = manages.map(|(m2, m1)| (m1, m2));
+                manages_arranged
+                    .join(&managed)
                     .inspect(|x| println!("{:?}", x));
             });
             let size = 10;

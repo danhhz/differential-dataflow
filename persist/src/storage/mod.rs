@@ -264,7 +264,7 @@ impl PersistedStreamSnapshot for BlobSnapshot {
                 let key = cursor.key(&batch);
                 let val = cursor.val(&batch);
                 cursor.map_times(&batch, |ts, r| {
-                    buf.push(((key.clone(), val.clone()), ts.clone(), r.clone()));
+                    buf.push(((key.clone(), val.clone()), ts.clone(), *r as i64));
                 });
                 cursor.step_val(&batch);
             }
