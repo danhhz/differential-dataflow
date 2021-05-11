@@ -14,7 +14,7 @@ use crate::{
 pub struct Config {}
 
 pub struct SQLiteManager {
-    dataz: HashMap<u64, Arc<Mutex<Vec<(Vec<u8>, u64, i64)>>>>,
+    dataz: HashMap<u64, Arc<Mutex<Vec<((Vec<u8>, Vec<u8>), u64, i64)>>>>,
 }
 
 impl SQLiteManager {
@@ -58,11 +58,14 @@ impl Persister for SQLiteManager {
 
 #[derive(Clone)]
 pub struct SQLite {
-    dataz: Arc<Mutex<Vec<(Vec<u8>, u64, i64)>>>,
+    dataz: Arc<Mutex<Vec<((Vec<u8>, Vec<u8>), u64, i64)>>>,
 }
 
 impl PersistedStreamWrite for SQLite {
-    fn write_sync(&mut self, updates: &[(Vec<u8>, u64, i64)]) -> Result<(), Box<dyn Error>> {
+    fn write_sync(
+        &mut self,
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
+    ) -> Result<(), Box<dyn Error>> {
         self.dataz.lock().expect("WIP").extend_from_slice(updates);
         Ok(())
     }
@@ -83,11 +86,11 @@ impl PersistedStreamMeta for SQLite {
 }
 
 pub struct SQLiteSnapshot {
-    dataz: Vec<(Vec<u8>, u64, i64)>,
+    dataz: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
 }
 
 impl PersistedStreamSnapshot for SQLiteSnapshot {
-    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         buf.append(&mut self.dataz);
         return false;
     }

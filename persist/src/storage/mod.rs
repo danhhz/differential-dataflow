@@ -9,7 +9,7 @@ use abomonation::{decode, encode};
 use abomonation_derive::Abomonation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
+use differential_dataflow::trace::implementations::ord::OrdValBatch;
 use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor};
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::Scope;
@@ -35,7 +35,7 @@ pub trait Buffer {
     fn write_sync(
         &mut self,
         id: u64,
-        updates: &[(Vec<u8>, u64, i64)],
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
     ) -> Result<(), Box<dyn Error>>;
     fn snapshot(
         &self,
@@ -53,7 +53,12 @@ struct BatchMeta {
 }
 
 struct BlobPersisterCore {
-    batcher: <OrdKeyBatch<Vec<u8>, u64, i64, usize> as Batch<Vec<u8>, (), u64, i64>>::Batcher,
+    batcher: <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
+        Vec<u8>,
+        Vec<u8>,
+        u64,
+        i64,
+    >>::Batcher,
     blob_meta: BatchMeta,
     blob: Box<dyn Blob>,
     buf: Box<dyn Buffer>,
@@ -96,8 +101,12 @@ impl BlobPersister {
                 batch_keys: Vec::new(),
             }
         };
-        let batcher =
-            <OrdKeyBatch<Vec<u8>, u64, i64, usize> as Batch<Vec<u8>, (), u64, i64>>::Batcher::new();
+        let batcher = <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
+            Vec<u8>,
+            Vec<u8>,
+            u64,
+            i64,
+        >>::Batcher::new();
         let core = BlobPersisterCore {
             blob,
             buf,
@@ -157,14 +166,13 @@ impl Persister for BlobPersister {
         G::Timestamp: Lattice + Ord,
     {
         let mut core = self.core.lock().expect("WIP");
-        // WIP
-        let stream = None.to_stream(&mut scope);
         // WIP unfortunate extra clone
         let batch_keys = core.blob_meta.batch_keys.clone();
         let batches = batch_keys
             .iter()
             .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
-            .collect();
+            .collect::<Vec<_>>();
+        let stream = batches.clone().to_stream(&mut scope);
         let trace = PersistedTraceReader::new(batches);
         Arranged { stream, trace }
     }
@@ -176,13 +184,16 @@ pub struct BlobWrite {
 }
 
 impl PersistedStreamWrite for BlobWrite {
-    fn write_sync(&mut self, updates: &[(Vec<u8>, u64, i64)]) -> Result<(), Box<dyn Error>> {
+    fn write_sync(
+        &mut self,
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
+    ) -> Result<(), Box<dyn Error>> {
         let mut core = self.core.lock().expect("WIP");
         core.buf.write_sync(self.id, updates)?;
         // WIP well this is unfortunate
         let mut batcher_updates = updates
             .iter()
-            .map(|(k, t, r)| ((k.clone(), ()), *t, *r))
+            .map(|((k, v), t, r)| ((k.clone(), v.clone()), *t, *r))
             .collect();
         core.batcher.push_batch(&mut batcher_updates);
         Ok(())
@@ -240,7 +251,7 @@ struct BlobSnapshot {
 }
 
 impl PersistedStreamSnapshot for BlobSnapshot {
-    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         let batch = match self.batches.pop() {
             Some(batch) => batch,
             None => return false,
@@ -251,8 +262,9 @@ impl PersistedStreamSnapshot for BlobSnapshot {
         while cursor.key_valid(&batch) {
             while cursor.val_valid(&batch) {
                 let key = cursor.key(&batch);
+                let val = cursor.val(&batch);
                 cursor.map_times(&batch, |ts, r| {
-                    buf.push((key.clone(), ts.clone(), r.clone()));
+                    buf.push(((key.clone(), val.clone()), ts.clone(), r.clone()));
                 });
                 cursor.step_val(&batch);
             }
@@ -268,7 +280,7 @@ struct PairSnapshot {
 }
 
 impl PersistedStreamSnapshot for PairSnapshot {
-    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         self.s1.read(buf) || self.s2.read(buf)
     }
 }
@@ -287,9 +299,21 @@ mod tests {
         let buf = FileBuffer::new(file::Config {})?;
 
         let updates = vec![
-            ("foo".as_bytes().to_vec(), 1, 1),
-            ("foo".as_bytes().to_vec(), 3, -1),
-            ("bar".as_bytes().to_vec(), 2, 1),
+            (
+                ("foo-k".as_bytes().to_vec(), "foo-v".as_bytes().to_vec()),
+                1,
+                1,
+            ),
+            (
+                ("foo-k".as_bytes().to_vec(), "foo-v".as_bytes().to_vec()),
+                3,
+                -1,
+            ),
+            (
+                ("bar-k".as_bytes().to_vec(), "bar-v".as_bytes().to_vec()),
+                1,
+                1,
+            ),
         ];
 
         // Initial dataflow

@@ -27,14 +27,14 @@ impl FileBuffer {
 #[derive(Abomonation)]
 struct WalEntry {
     id: u64,
-    updates: Vec<(Vec<u8>, u64, i64)>,
+    updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
 }
 
 impl Buffer for FileBuffer {
     fn write_sync(
         &mut self,
         id: u64,
-        updates: &[(Vec<u8>, u64, i64)],
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
     ) -> Result<(), Box<dyn Error>> {
         let entry = WalEntry {
             id: id,
@@ -70,7 +70,7 @@ pub struct FileWalSnapshot {
 }
 
 impl PersistedStreamSnapshot for FileWalSnapshot {
-    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         while let Some(mut dataz) = self.dataz.pop() {
             let entry = unsafe { abomonation::decode::<WalEntry>(&mut dataz) };
             let (entry, _) = entry.expect("WIP");

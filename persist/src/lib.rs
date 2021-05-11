@@ -66,12 +66,15 @@ pub trait Persister {
 }
 
 pub trait PersistedStreamWrite {
-    fn write_sync(&mut self, updates: &[(Vec<u8>, u64, i64)]) -> Result<(), Box<dyn Error>>;
+    fn write_sync(
+        &mut self,
+        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
+    ) -> Result<(), Box<dyn Error>>;
 }
 
 pub trait PersistedStreamSnapshot {
     // returns false when there is no more data
-    fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool;
+    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool;
 }
 
 pub trait PersistedStreamMeta {
@@ -100,7 +103,7 @@ impl PersistedTraceReader {
 impl TraceReader for PersistedTraceReader {
     type Key = Vec<u8>;
 
-    type Val = ();
+    type Val = Vec<u8>;
 
     type Time = u64;
 
@@ -110,10 +113,10 @@ impl TraceReader for PersistedTraceReader {
 
     type Cursor = CursorList<
         Vec<u8>,
-        (),
+        Vec<u8>,
         u64,
         i64,
-        <AbomonatedBatch as BatchReader<Vec<u8>, (), u64, i64>>::Cursor,
+        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, i64>>::Cursor,
     >;
 
     fn cursor_through(
@@ -183,7 +186,7 @@ pub trait PersistUnarySync {
     fn persist_unary_sync(self, p: PersistableStream) -> Self;
 }
 
-impl<G> PersistUnarySync for Stream<G, (Vec<u8>, u64, i64)>
+impl<G> PersistUnarySync for Stream<G, ((Vec<u8>, Vec<u8>), u64, i64)>
 where
     G: Scope<Timestamp = u64>,
 {
@@ -251,10 +254,12 @@ mod abom {
 
     use abomonation::abomonated::Abomonated;
     use differential_dataflow::trace::abomonated_blanket_impls::AbomonatedBatchCursor;
-    use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
+    use differential_dataflow::trace::implementations::ord::OrdValBatch;
     use differential_dataflow::trace::{BatchReader, Cursor};
 
-    pub struct AbomonatedBatch(pub Arc<Abomonated<OrdKeyBatch<Vec<u8>, u64, i64, usize>, Vec<u8>>>);
+    pub struct AbomonatedBatch(
+        pub Arc<Abomonated<OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>, Vec<u8>>>,
+    );
 
     impl Clone for AbomonatedBatch {
         fn clone(&self) -> Self {
@@ -262,7 +267,7 @@ mod abom {
         }
     }
 
-    impl BatchReader<Vec<u8>, (), u64, i64> for AbomonatedBatch {
+    impl BatchReader<Vec<u8>, Vec<u8>, u64, i64> for AbomonatedBatch {
         type Cursor = AbomonatedCursor;
 
         fn cursor(&self) -> Self::Cursor {
@@ -279,10 +284,16 @@ mod abom {
     }
 
     pub struct AbomonatedCursor(
-        AbomonatedBatchCursor<Vec<u8>, (), u64, i64, OrdKeyBatch<Vec<u8>, u64, i64, usize>>,
+        AbomonatedBatchCursor<
+            Vec<u8>,
+            Vec<u8>,
+            u64,
+            i64,
+            OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>,
+        >,
     );
 
-    impl Cursor<Vec<u8>, (), u64, i64> for AbomonatedCursor {
+    impl Cursor<Vec<u8>, Vec<u8>, u64, i64> for AbomonatedCursor {
         type Storage = AbomonatedBatch;
 
         fn key_valid(&self, storage: &Self::Storage) -> bool {
@@ -297,7 +308,7 @@ mod abom {
             self.0.key(&storage.0)
         }
 
-        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a () {
+        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
             self.0.val(&storage.0)
         }
 
@@ -317,7 +328,7 @@ mod abom {
             self.0.step_val(&storage.0)
         }
 
-        fn seek_val(&mut self, storage: &Self::Storage, val: &()) {
+        fn seek_val(&mut self, storage: &Self::Storage, val: &Vec<u8>) {
             self.0.seek_val(&storage.0, val)
         }
 
@@ -337,6 +348,7 @@ mod tests {
     use std::sync::{mpsc, Arc, Mutex};
 
     use differential_dataflow::input::InputSession;
+    use differential_dataflow::operators::Join;
     use differential_dataflow::AsCollection;
     use timely::dataflow::operators::capture::extract::Extract;
     use timely::dataflow::operators::{Capture, Map, Probe};
@@ -375,9 +387,13 @@ mod tests {
                 let manages = input
                     .to_collection(scope) // TODO: Get rid of these 2 maps
                     .inner
-                    .map(|(row, ts, diff): (Vec<u8>, u64, isize)| (row, ts, diff as i64))
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
+                        ((key, val), ts, diff as i64)
+                    })
                     .persist_unary_sync(stream)
-                    .map(|(row, ts, diff): (Vec<u8>, u64, i64)| (row, ts, diff as isize))
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
+                        ((key, val), ts, diff as isize)
+                    })
                     .probe_with(&mut probe)
                     .as_collection();
 
@@ -386,7 +402,10 @@ mod tests {
             });
             input.advance_to(0);
             for person in 1..=5 {
-                input.insert(format!("person {}", person).into_bytes());
+                input.insert((
+                    format!("k{}", person).into_bytes(),
+                    format!("v{}", person).into_bytes(),
+                ));
                 input.advance_to(person);
                 input.flush();
             }
@@ -418,16 +437,23 @@ mod tests {
                 let manages = input
                     .to_collection(scope) // TODO: Get rid of these 2 maps
                     .inner
-                    .map(|(row, ts, diff): (Vec<u8>, u64, isize)| (row, ts, diff as i64))
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
+                        ((key, val), ts, diff as i64)
+                    })
                     .persist_unary_sync(stream)
-                    .map(|(row, ts, diff): (Vec<u8>, u64, i64)| (row, ts, diff as isize))
+                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
+                        ((key, val), ts, diff as isize)
+                    })
                     .as_collection();
 
                 manages.inner.capture_into(send);
             });
             input.advance_to(5);
             for person in 6..=8 {
-                input.insert(format!("person {}", person).into_bytes());
+                input.insert((
+                    format!("k{}", person).into_bytes(),
+                    format!("v{}", person).into_bytes(),
+                ));
                 input.advance_to(person);
             }
         })?;
@@ -435,6 +461,29 @@ mod tests {
         let second_dataflow = recv.extract();
         assert_eq!(second_dataflow.iter().flat_map(|(_, x)| x).count(), 8);
 
+        Ok(())
+    }
+
+    #[test]
+    fn arrangement() -> Result<(), Box<dyn Error>> {
+        timely::execute(Config::thread(), move |worker| {
+            let mut input = InputSession::new();
+            worker.dataflow(|scope| {
+                let manages = input.to_collection(scope);
+                manages
+                    .map(|(m2, m1)| (m1, m2))
+                    .join(&manages)
+                    .inspect(|x| println!("{:?}", x));
+            });
+            let size = 10;
+            input.advance_to(0);
+            for person in 0..size {
+                input.insert((
+                    (person / 2).to_string().into_bytes(),
+                    (person).to_string().into_bytes(),
+                ));
+            }
+        })?;
         Ok(())
     }
 }
