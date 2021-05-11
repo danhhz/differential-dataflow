@@ -1,17 +1,24 @@
 //! WIP
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
+use abomonation::abomonated::Abomonated;
 use abomonation::{decode, encode};
 use abomonation_derive::Abomonation;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
 use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor};
+use timely::dataflow::operators::ToStream;
+use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
+use crate::abom::AbomonatedBatch;
 use crate::{
     PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
-    PersistedStreamWrite, Persister,
+    PersistedStreamWrite, PersistedTraceReader, Persister,
 };
 
 // WIP: feature gate the following
@@ -50,6 +57,25 @@ struct BlobPersisterCore {
     blob_meta: BatchMeta,
     blob: Box<dyn Blob>,
     buf: Box<dyn Buffer>,
+    // TODO: LRU
+    blob_cache: HashMap<String, AbomonatedBatch>,
+}
+
+impl BlobPersisterCore {
+    fn get_blob(&mut self, key: &String) -> Result<Option<AbomonatedBatch>, Box<dyn Error>> {
+        if let Some(batch) = self.blob_cache.get(key) {
+            return Ok(Some(batch.clone()));
+        }
+        match self.blob.get(key.as_bytes())? {
+            None => Ok(None),
+            Some(bytes) => {
+                let batch = unsafe { Abomonated::new(bytes) }.expect("WIP");
+                let batch = AbomonatedBatch(Arc::new(batch));
+                self.blob_cache.insert(key.clone(), batch.clone());
+                Ok(Some(batch))
+            }
+        }
+    }
 }
 
 pub struct BlobPersister {
@@ -77,6 +103,7 @@ impl BlobPersister {
             buf,
             blob_meta,
             batcher,
+            blob_cache: HashMap::new(),
         };
         Ok(BlobPersister {
             core: Arc::new(Mutex::new(core)),
@@ -84,10 +111,12 @@ impl BlobPersister {
     }
 
     fn blob_snapshot(&self) -> Result<BlobSnapshot, Box<dyn Error>> {
-        let core = self.core.lock().expect("WIP");
+        let mut core = self.core.lock().expect("WIP");
         let mut batches = Vec::new();
-        for key in core.blob_meta.batch_keys.iter() {
-            batches.push(core.blob.get(key.as_bytes())?.expect("WIP"));
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        for key in batch_keys.iter() {
+            batches.push(core.get_blob(key).expect("WIP").expect("WIP"));
         }
         let snap = BlobSnapshot {
             frontier: core.blob_meta.frontier,
@@ -122,16 +151,22 @@ impl Persister for BlobPersister {
         Ok((PersistableStream(write, snap), PersistableMeta(meta)))
     }
 
-    fn arranged<G>(
-        &self,
-        scope: G,
-        id: u64,
-    ) -> differential_dataflow::operators::arrange::Arranged<G, crate::PersistedTraceReader>
+    fn arranged<G>(&self, mut scope: G, _id: u64) -> Arranged<G, crate::PersistedTraceReader>
     where
-        G: timely::dataflow::Scope,
-        G::Timestamp: differential_dataflow::lattice::Lattice + Ord,
+        G: Scope,
+        G::Timestamp: Lattice + Ord,
     {
-        todo!()
+        let mut core = self.core.lock().expect("WIP");
+        // WIP
+        let stream = None.to_stream(&mut scope);
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        let batches = batch_keys
+            .iter()
+            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
+            .collect();
+        let trace = PersistedTraceReader::new(batches);
+        Arranged { stream, trace }
     }
 }
 
@@ -201,31 +236,27 @@ impl PersistedStreamMeta for BlobMeta {
 
 struct BlobSnapshot {
     frontier: Option<u64>,
-    // TODO: This should just be a cursor.
-    batches: Vec<Vec<u8>>,
+    batches: Vec<AbomonatedBatch>,
 }
 
 impl PersistedStreamSnapshot for BlobSnapshot {
     fn read(&mut self, buf: &mut Vec<(Vec<u8>, u64, i64)>) -> bool {
-        let mut bytes = if let Some(bytes) = self.batches.pop() {
-            bytes
-        } else {
-            return false;
+        let batch = match self.batches.pop() {
+            Some(batch) => batch,
+            None => return false,
         };
-        let (batch, _) =
-            unsafe { decode::<OrdKeyBatch<Vec<u8>, u64, i64, usize>>(&mut bytes) }.expect("WIP");
         let mut cursor = batch.cursor();
-        cursor.rewind_keys(batch);
-        cursor.rewind_vals(batch);
-        while cursor.key_valid(batch) {
-            while cursor.val_valid(batch) {
-                let key = cursor.key(batch);
-                cursor.map_times(batch, |ts, r| {
+        cursor.rewind_keys(&batch);
+        cursor.rewind_vals(&batch);
+        while cursor.key_valid(&batch) {
+            while cursor.val_valid(&batch) {
+                let key = cursor.key(&batch);
+                cursor.map_times(&batch, |ts, r| {
                     buf.push((key.clone(), ts.clone(), r.clone()));
                 });
-                cursor.step_val(batch);
+                cursor.step_val(&batch);
             }
-            cursor.step_key(batch);
+            cursor.step_key(&batch);
         }
         true
     }

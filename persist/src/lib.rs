@@ -11,7 +11,9 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Concat, Operator, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::PartialOrder;
 
+use crate::abom::AbomonatedBatch;
 use crate::storage::sqlite::SQLiteManager;
 
 pub mod storage;
@@ -80,8 +82,19 @@ pub trait PersistedStreamMeta {
 
 #[derive(Clone)]
 pub struct PersistedTraceReader {
+    batches: Vec<AbomonatedBatch>,
     logical_compaction: Antichain<u64>,
     physical_compaction: Antichain<u64>,
+}
+
+impl PersistedTraceReader {
+    fn new(batches: Vec<AbomonatedBatch>) -> Self {
+        PersistedTraceReader {
+            batches,
+            logical_compaction: Antichain::new(),
+            physical_compaction: Antichain::new(),
+        }
+    }
 }
 
 impl TraceReader for PersistedTraceReader {
@@ -93,14 +106,14 @@ impl TraceReader for PersistedTraceReader {
 
     type R = i64;
 
-    type Batch = abom::AbomonatedBatch;
+    type Batch = AbomonatedBatch;
 
     type Cursor = CursorList<
         Vec<u8>,
         (),
         u64,
         i64,
-        <abom::AbomonatedBatch as BatchReader<Vec<u8>, (), u64, i64>>::Cursor,
+        <AbomonatedBatch as BatchReader<Vec<u8>, (), u64, i64>>::Cursor,
     >;
 
     fn cursor_through(
@@ -110,7 +123,16 @@ impl TraceReader for PersistedTraceReader {
         Self::Cursor,
         <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
     )> {
-        todo!()
+        // WIP check this filter condition. also sanity check that the batches
+        // line up with no holes
+        let storage = self
+            .batches
+            .iter()
+            .filter(|b| PartialOrder::less_equal(&b.upper().borrow(), &upper))
+            .cloned()
+            .collect::<Vec<_>>();
+        let cursors = storage.iter().map(|b| b.cursor()).collect();
+        Some((CursorList::new(cursors, &storage), storage))
     }
 
     fn set_logical_compaction(
@@ -141,8 +163,10 @@ impl TraceReader for PersistedTraceReader {
         self.physical_compaction.borrow()
     }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
-        todo!()
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+        for batch in self.batches.iter() {
+            f(batch)
+        }
     }
 }
 
@@ -223,16 +247,18 @@ where
 // WIP I couldn't get the types happy with the existing stuff so I had to make
 // these unfortunate wrappers
 mod abom {
+    use std::sync::Arc;
+
     use abomonation::abomonated::Abomonated;
     use differential_dataflow::trace::abomonated_blanket_impls::AbomonatedBatchCursor;
     use differential_dataflow::trace::implementations::ord::OrdKeyBatch;
     use differential_dataflow::trace::{BatchReader, Cursor};
 
-    pub struct AbomonatedBatch(Abomonated<OrdKeyBatch<Vec<u8>, u64, i64, usize>, Vec<u8>>);
+    pub struct AbomonatedBatch(pub Arc<Abomonated<OrdKeyBatch<Vec<u8>, u64, i64, usize>, Vec<u8>>>);
 
     impl Clone for AbomonatedBatch {
         fn clone(&self) -> Self {
-            todo!()
+            AbomonatedBatch(self.0.clone())
         }
     }
 
