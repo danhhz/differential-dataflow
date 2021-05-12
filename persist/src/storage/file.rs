@@ -6,8 +6,9 @@ use abomonation;
 use abomonation_derive::Abomonation;
 
 use crate::error::Error;
+use crate::persister::Snapshot;
 use crate::storage::Buffer;
-use crate::{PersistedId, Snapshot};
+use crate::PersistedId;
 
 pub struct Config {}
 
@@ -27,14 +28,14 @@ impl FileBuffer {
 #[derive(Abomonation)]
 struct WalEntry {
     id: u64,
-    updates: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
+    updates: Vec<((String, String), u64, isize)>,
 }
 
 impl Buffer for FileBuffer {
     fn write_sync(
         &mut self,
         id: PersistedId,
-        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
+        updates: &[((String, String), u64, isize)],
     ) -> Result<(), Error> {
         let entry = WalEntry {
             id: id.0,
@@ -66,7 +67,7 @@ pub struct FileWalSnapshot {
 }
 
 impl Snapshot for FileWalSnapshot {
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((String, String), u64, isize)>) -> bool {
         while let Some(mut dataz) = self.dataz.pop() {
             let entry = unsafe { abomonation::decode::<WalEntry>(&mut dataz) };
             let (entry, _) = entry.expect("WIP");

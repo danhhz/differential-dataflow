@@ -32,9 +32,9 @@ impl PersistedTrace {
 }
 
 impl TraceReader for PersistedTrace {
-    type Key = Vec<u8>;
+    type Key = String;
 
-    type Val = Vec<u8>;
+    type Val = String;
 
     type Time = u64;
 
@@ -43,11 +43,11 @@ impl TraceReader for PersistedTrace {
     type Batch = AbomonatedBatch;
 
     type Cursor = CursorList<
-        Vec<u8>,
-        Vec<u8>,
+        String,
+        String,
         u64,
         isize,
-        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
+        <AbomonatedBatch as BatchReader<String, String, u64, isize>>::Cursor,
     >;
 
     fn cursor_through(
@@ -123,7 +123,7 @@ pub(crate) mod abom {
     use differential_dataflow::trace::{BatchReader, Cursor};
 
     pub struct AbomonatedBatch(
-        pub Arc<Abomonated<OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>, Vec<u8>>>,
+        pub Arc<Abomonated<OrdValBatch<String, String, u64, i64, usize>, Vec<u8>>>,
     );
 
     impl Clone for AbomonatedBatch {
@@ -132,7 +132,7 @@ pub(crate) mod abom {
         }
     }
 
-    impl BatchReader<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedBatch {
+    impl BatchReader<String, String, u64, isize> for AbomonatedBatch {
         type Cursor = AbomonatedCursor;
 
         fn cursor(&self) -> Self::Cursor {
@@ -150,15 +150,15 @@ pub(crate) mod abom {
 
     pub struct AbomonatedCursor(
         AbomonatedBatchCursor<
-            Vec<u8>,
-            Vec<u8>,
+            String,
+            String,
             u64,
             i64,
-            OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>,
+            OrdValBatch<String, String, u64, i64, usize>,
         >,
     );
 
-    impl Cursor<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedCursor {
+    impl Cursor<String, String, u64, isize> for AbomonatedCursor {
         type Storage = AbomonatedBatch;
 
         fn key_valid(&self, storage: &Self::Storage) -> bool {
@@ -169,11 +169,11 @@ pub(crate) mod abom {
             self.0.val_valid(&storage.0)
         }
 
-        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
+        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a String {
             self.0.key(&storage.0)
         }
 
-        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
+        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a String {
             self.0.val(&storage.0)
         }
 
@@ -186,7 +186,7 @@ pub(crate) mod abom {
             self.0.step_key(&storage.0)
         }
 
-        fn seek_key(&mut self, storage: &Self::Storage, key: &Vec<u8>) {
+        fn seek_key(&mut self, storage: &Self::Storage, key: &String) {
             self.0.seek_key(&storage.0, key)
         }
 
@@ -194,7 +194,7 @@ pub(crate) mod abom {
             self.0.step_val(&storage.0)
         }
 
-        fn seek_val(&mut self, storage: &Self::Storage, val: &Vec<u8>) {
+        fn seek_val(&mut self, storage: &Self::Storage, val: &String) {
             self.0.seek_val(&storage.0, val)
         }
 

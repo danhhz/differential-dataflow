@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::Collection;
 use timely::dataflow::{ProbeHandle, Scope, Stream};
 
 use crate::error::Error;
-use crate::persister::{PersistableV1, PersistableV2, PersisterV1};
+use crate::persister::{MetaV1, MetaV2, PersisterV1};
 use crate::storage::sqlite::SQLiteManager;
 use crate::trace::PersistedTrace;
 
@@ -26,11 +27,16 @@ pub struct PersistedId(pub u64);
 
 // WIP the usage of Clone, Arc, and Mutex have gotten out of control
 
-pub struct PersistManager<R> {
-    persister: Arc<Mutex<R>>,
+pub struct PersistManager<P> {
+    persister: Arc<Mutex<P>>,
 }
 
-impl<R> Clone for PersistManager<R> {
+// We don't get the automatically derived Send and Sync because of the type
+// parameter.
+unsafe impl<P> Send for PersistManager<P> {}
+unsafe impl<P> Sync for PersistManager<P> {}
+
+impl<P> Clone for PersistManager<P> {
     fn clone(&self) -> Self {
         PersistManager {
             persister: self.persister.clone(),
@@ -38,8 +44,8 @@ impl<R> Clone for PersistManager<R> {
     }
 }
 
-impl<R: PersisterV1> PersistManager<R> {
-    pub fn new(persister: R) -> Self {
+impl<P: PersisterV1> PersistManager<P> {
+    pub fn new(persister: P) -> Self {
         PersistManager {
             persister: Arc::new(Mutex::new(persister)),
         }
@@ -48,7 +54,7 @@ impl<R: PersisterV1> PersistManager<R> {
     pub fn create_or_load(
         &mut self,
         id: PersistedId,
-    ) -> Result<Persistable<R::Persistable>, Error> {
+    ) -> Result<Persistable<P::Write, P::Meta>, Error> {
         self.persister.lock()?.create_or_load(id)
     }
 
@@ -59,75 +65,114 @@ impl<R: PersisterV1> PersistManager<R> {
 }
 
 // NB: Intentionally not Clone
-pub struct Persistable<P> {
+pub struct Persistable<W, M> {
     id: PersistedId,
-    p: P,
+    write: W,
+    meta: M,
 }
 
-pub struct PersistedStream<G, P>
+impl<W, M> Persistable<W, M> {
+    fn consume(self) -> (W, M) {
+        (self.write, self.meta)
+    }
+}
+
+#[derive(Clone)]
+pub struct PersistedMeta<M> {
+    meta: M,
+    // NB: This is here instead of a method on ReadV1 so that the operator can
+    // stop bothering to update it if no one cares (via holding a Weak ref for
+    // the probe core).
+    probe: ProbeHandle<u64>,
+}
+
+impl<M: MetaV1> PersistedMeta<M> {
+    pub fn probe(&self) -> ProbeHandle<u64> {
+        self.probe.clone()
+    }
+
+    pub fn advance(&mut self, ts: u64) {
+        self.meta.advance(ts)
+    }
+
+    pub fn allow_compaction(&mut self, ts: u64) {
+        self.meta.allow_compaction(ts)
+    }
+}
+
+impl<M: MetaV2> PersistedMeta<M> {
+    pub fn arranged<G>(&self, scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
+    where
+        G: Scope,
+        G::Timestamp: Lattice,
+    {
+        self.meta.arranged(scope)
+    }
+}
+
+pub struct PersistedStream<G, M>
 where
     G: Scope,
 {
-    persistable: P,
-    stream: Stream<G, ((Vec<u8>, Vec<u8>), u64, i64)>,
+    meta: PersistedMeta<M>,
+    stream: Stream<G, ((String, String), u64, isize)>,
 }
 
-impl<G, P: PersistableV1> PersistedStream<G, P>
+impl<G, M: MetaV1> PersistedStream<G, M>
 where
     G: Scope<Timestamp = u64>,
 {
-    pub fn meta(&self) -> PersistedMeta {
-        todo!()
+    pub fn meta(&self) -> &PersistedMeta<M> {
+        &self.meta
     }
 
     // NB: This intentionally consumes self so we only end up with one stream
     // per PersistId per process.
-    pub fn into_stream(self) -> Stream<G, ((Vec<u8>, Vec<u8>), u64, i64)> {
+    pub fn into_stream(self) -> Stream<G, ((String, String), u64, isize)> {
         self.stream
     }
 }
 
-impl<G, P: PersistableV2> PersistedStream<G, P>
+pub struct PersistedCollection<G, M>
 where
-    G: Scope,
-    G::Timestamp: Lattice + Ord,
+    G: Scope<Timestamp = u64>,
+{
+    meta: PersistedMeta<M>,
+    collection: Collection<G, (String, String), isize>,
+}
+
+impl<G, M: MetaV1> PersistedCollection<G, M>
+where
+    G: Scope<Timestamp = u64>,
+{
+    pub fn meta(&self) -> &PersistedMeta<M> {
+        &self.meta
+    }
+
+    // NB: This intentionally consumes self so we only end up with one stream
+    // per PersistId per process.
+    pub fn into_collection(self) -> Collection<G, (String, String), isize> {
+        self.collection
+    }
+
+    pub fn into_stream(self) -> PersistedStream<G, M> {
+        PersistedStream {
+            meta: self.meta,
+            stream: self.collection.inner,
+        }
+    }
+}
+
+impl<G, M: MetaV2> PersistedCollection<G, M>
+where
+    G: Scope<Timestamp = u64>,
 {
     pub fn arranged(&self) -> Result<Arranged<G, PersistedTrace>, Error> {
-        self.persistable.arranged(self.stream.scope())
+        self.meta.meta.arranged(self.collection.inner.scope())
     }
 }
 
-pub struct PersistedMeta {}
-
-impl PersistedMeta {
-    // WIP fn advance(&mut self, ts: u64);
-
-    // WIP fn allow_compaction(&mut self, ts: u64)
-
-    pub fn probe(&self) -> ProbeHandle<u64> {
-        todo!()
-    }
-}
-
-// WIP find homes for these
-
-pub trait Snapshot {
-    // returns false when there is no more data
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool;
-}
-
-struct PairSnapshot {
-    s1: Box<dyn Snapshot>,
-    s2: Box<dyn Snapshot>,
-}
-
-impl Snapshot for PairSnapshot {
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
-        self.s1.read(buf) || self.s2.read(buf)
-    }
-}
-
-#[cfg(proc_macro)]
+#[cfg(test)]
 mod tests {
     use std::error::Error;
     use std::sync::{mpsc, Arc, Mutex};
@@ -142,65 +187,56 @@ mod tests {
     use timely::dataflow::ProbeHandle;
     use timely::Config;
 
+    use crate::operators::PersistCollectionSync;
     use crate::storage::file::{self, FileBuffer};
     use crate::storage::s3::{self, S3Blob};
     use crate::storage::{Blob, BlobPersister, Buffer};
-    use crate::{PersistUnarySync, PersistedId, Persister};
+    use crate::{PersistManager, PersistedId};
 
     #[test]
-    fn persist_unary_sync() -> Result<(), Box<dyn Error>> {
+    fn persist_collection_sync() -> Result<(), Box<dyn Error>> {
         let id = PersistedId(1);
         let blob = S3Blob::new(s3::Config {})?;
         let buf = FileBuffer::new(file::Config {})?;
-        let (send, recv) = mpsc::channel();
-        let send = Arc::new(Mutex::new(send));
+        let p = BlobPersister::new(
+            Box::new(blob.clone()) as Box<dyn Blob>,
+            Box::new(buf.clone()) as Box<dyn Buffer>,
+        )?;
+        let p = PersistManager::new(p);
 
         // Initial dataflow
-        let (blob1, buf1) = (blob.clone(), buf.clone());
+        let p2 = p.clone();
+        let (send, recv) = mpsc::channel();
+        let send = Arc::new(Mutex::new(send));
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
-            let mut persist = None;
-
-            let probe = worker.dataflow(|scope| {
+            let mut p2 = p2.clone();
+            let (probe, mut meta) = worker.dataflow(|scope| {
                 let mut probe = ProbeHandle::new();
                 let send = send.lock().expect("WIP").clone();
-                let mut p = BlobPersister::new(
-                    Box::new(blob1.clone()) as Box<dyn Blob>,
-                    Box::new(buf1.clone()) as Box<dyn Buffer>,
-                )
-                .expect("WIP");
 
-                let (stream, meta) = p.create_or_load(id).expect("WIP");
-                persist = Some(meta);
+                let persister = p2.create_or_load(id).expect("WIP");
                 let manages = input
-                    .to_collection(scope) // TODO: Get rid of these 2 maps
+                    .to_collection(scope)
+                    .persist_collection_sync(persister);
+                let meta = manages.meta().clone();
+                manages
+                    .into_collection()
                     .inner
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
-                        ((key, val), ts, diff as i64)
-                    })
-                    .persist_unary_sync(stream)
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
-                        ((key, val), ts, diff as isize)
-                    })
                     .probe_with(&mut probe)
-                    .as_collection();
-
-                manages.inner.capture_into(send);
-                probe
+                    .capture_into(send);
+                (probe, meta)
             });
             input.advance_to(0);
             for person in 1..=5 {
-                input.insert((
-                    format!("k{}", person).into_bytes(),
-                    format!("v{}", person).into_bytes(),
-                ));
+                input.insert((format!("k{}", person), format!("v{}", person)));
                 input.advance_to(person);
                 input.flush();
             }
             while probe.less_than(input.time()) {
                 worker.step();
             }
-            persist.unwrap().0.advance(3);
+            meta.advance(3);
         })?;
 
         let first_dataflow = recv.extract();
@@ -208,41 +244,35 @@ mod tests {
         assert_eq!(first_dataflow.iter().flat_map(|(_, x)| x).count(), 5);
 
         // Restart dataflow with existing data
-        let (blob2, buf2) = (blob.clone(), buf.clone());
+        let p2 = p.clone();
         let (send, recv) = mpsc::channel();
         let send = Arc::new(Mutex::new(send));
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
-            worker.dataflow(|scope| {
+
+            let mut p2 = p2.clone();
+            let probe = worker.dataflow(|scope| {
+                let mut probe = ProbeHandle::new();
                 let send = send.lock().expect("WIP").clone();
-                let mut p = BlobPersister::new(
-                    Box::new(blob2.clone()) as Box<dyn Blob>,
-                    Box::new(buf2.clone()) as Box<dyn Buffer>,
-                )
-                .expect("WIP");
 
-                let (stream, _meta) = p.create_or_load(id).expect("WIP");
-                let manages = input
-                    .to_collection(scope) // TODO: Get rid of these 2 maps
+                let persister = p2.create_or_load(id).expect("WIP");
+                input
+                    .to_collection(scope)
+                    .persist_collection_sync(persister)
+                    .into_collection()
                     .inner
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
-                        ((key, val), ts, diff as i64)
-                    })
-                    .persist_unary_sync(stream)
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
-                        ((key, val), ts, diff as isize)
-                    })
-                    .as_collection();
-
-                manages.inner.capture_into(send);
+                    .probe_with(&mut probe)
+                    .capture_into(send);
+                probe
             });
-            input.advance_to(5);
+            input.advance_to(0);
             for person in 6..=8 {
-                input.insert((
-                    format!("k{}", person).into_bytes(),
-                    format!("v{}", person).into_bytes(),
-                ));
+                input.insert((format!("k{}", person), format!("v{}", person)));
                 input.advance_to(person);
+                input.flush();
+            }
+            while probe.less_than(input.time()) {
+                worker.step();
             }
         })?;
 
@@ -257,52 +287,42 @@ mod tests {
         let id = PersistedId(1);
         let blob = S3Blob::new(s3::Config {})?;
         let buf = FileBuffer::new(file::Config {})?;
+        let p = PersistManager::new(BlobPersister::new(
+            Box::new(blob.clone()) as Box<dyn Blob>,
+            Box::new(buf.clone()) as Box<dyn Buffer>,
+        )?);
+
         let (send, recv) = mpsc::channel();
         let send = Arc::new(Mutex::new(send));
-
         timely::execute(Config::thread(), move |worker| {
+            let mut p = p.clone();
             let mut input = InputSession::new();
-            let (p, mut meta, probe) = worker.dataflow(|scope| {
-                let mut p = BlobPersister::new(
-                    Box::new(blob.clone()) as Box<dyn Blob>,
-                    Box::new(buf.clone()) as Box<dyn Buffer>,
-                )
-                .expect("WIP");
-                let (stream, meta) = p.create_or_load(id).expect("WIP");
+            let (mut meta, probe) = worker.dataflow(|scope| {
+                let persister = p.create_or_load(PersistedId(1)).expect("WIP");
 
-                let probe = input
+                let c = input
                     .to_collection(scope)
-                    .inner
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, isize)| {
-                        ((key, val), ts, diff as i64)
-                    })
-                    .persist_unary_sync(stream)
-                    .map(|((key, val), ts, diff): ((Vec<u8>, Vec<u8>), u64, i64)| {
-                        ((key, val), ts, diff as isize)
-                    })
-                    .as_collection()
-                    .probe();
-                (p, meta, probe)
+                    .persist_collection_sync(persister);
+                let meta = c.meta().clone();
+                let probe = c.into_collection().probe();
+                (meta, probe)
             });
 
             input.advance_to(0);
             for person in 0..10 {
-                input.insert((
-                    (person / 2).to_string().into_bytes(),
-                    (person).to_string().into_bytes(),
-                ));
+                input.insert(((person / 2).to_string(), (person).to_string()));
             }
             input.advance_to(10);
             input.flush();
             while probe.less_than(input.time()) {
                 worker.step();
             }
-            meta.0.advance(10);
+            meta.advance(10);
             assert!(blob.entries() > 0);
 
             worker.dataflow(|scope| {
                 let send = send.lock().expect("WIP").clone();
-                let manages_arranged = p.arranged(scope.clone(), 1).expect("WIP");
+                let manages_arranged = meta.arranged(scope.clone()).expect("WIP");
                 let manages = manages_arranged
                     .stream
                     .flat_map(|b| {
@@ -334,11 +354,7 @@ mod tests {
         ]
         .into_iter()
         .map(|((x, (y, z)), t, r)| {
-            let (x, y, z) = (
-                x.to_string().into_bytes(),
-                y.to_string().into_bytes(),
-                z.to_string().into_bytes(),
-            );
+            let (x, y, z) = (x.to_string(), y.to_string(), z.to_string());
             // Swap z and y to match the dd book since we had the wrong
             // thing arranged for join_core.
             ((x, (z, y)), t as u64, r as isize)

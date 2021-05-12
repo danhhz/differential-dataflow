@@ -16,10 +16,12 @@ use timely::dataflow::Scope;
 use timely::progress::Antichain;
 
 use crate::error::Error;
-use crate::persister::{PersistableV1, PersistableV2, PersisterV1, PersisterV2};
+use crate::persister::{
+    MetaV1, MetaV2, PairSnapshot, PersisterV1, PersisterV2, Snapshot, WriteV1, WriteV2,
+};
 use crate::trace::abom::AbomonatedBatch;
 use crate::trace::PersistedTrace;
-use crate::{PairSnapshot, Persistable, PersistedId, Snapshot};
+use crate::{Persistable, PersistedId};
 
 // WIP: feature gate the following
 pub mod file;
@@ -35,7 +37,7 @@ pub trait Buffer {
     fn write_sync(
         &mut self,
         id: PersistedId,
-        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
+        updates: &[((String, String), u64, isize)],
     ) -> Result<(), Error>;
     fn snapshot(&self, id: PersistedId, lower: Option<u64>) -> Result<Box<dyn Snapshot>, Error>;
 }
@@ -49,12 +51,8 @@ pub(crate) struct BatchMeta {
 }
 
 pub(crate) struct BlobPersisterCore {
-    pub(crate) batcher: <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
-        Vec<u8>,
-        Vec<u8>,
-        u64,
-        i64,
-    >>::Batcher,
+    pub(crate) batcher:
+        <OrdValBatch<String, String, u64, i64, usize> as Batch<String, String, u64, i64>>::Batcher,
     pub(crate) blob_meta: BatchMeta,
     pub(crate) blob: Box<dyn Blob>,
     pub(crate) buf: Box<dyn Buffer>,
@@ -77,6 +75,20 @@ impl BlobPersisterCore {
             }
         }
     }
+
+    fn blob_snapshot(&mut self) -> Result<BlobSnapshot, Error> {
+        let mut batches = Vec::new();
+        // WIP unfortunate extra clone
+        let batch_keys = self.blob_meta.batch_keys.clone();
+        for key in batch_keys.iter() {
+            batches.push(self.get_blob(key)?.expect("WIP"));
+        }
+        let snap = BlobSnapshot {
+            frontier: self.blob_meta.frontier,
+            batches,
+        };
+        Ok(snap)
+    }
 }
 
 pub struct BlobPersister {
@@ -97,9 +109,9 @@ impl BlobPersister {
                 batch_keys: Vec::new(),
             }
         };
-        let batcher = <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
-            Vec<u8>,
-            Vec<u8>,
+        let batcher = <OrdValBatch<String, String, u64, i64, usize> as Batch<
+            String,
+            String,
             u64,
             i64,
         >>::Batcher::new();
@@ -114,45 +126,25 @@ impl BlobPersister {
             core: Arc::new(Mutex::new(core)),
         })
     }
-
-    fn blob_snapshot(&self) -> Result<BlobSnapshot, Error> {
-        let mut core = self.core.lock()?;
-        let mut batches = Vec::new();
-        // WIP unfortunate extra clone
-        let batch_keys = core.blob_meta.batch_keys.clone();
-        for key in batch_keys.iter() {
-            batches.push(core.get_blob(key)?.expect("WIP"));
-        }
-        let snap = BlobSnapshot {
-            frontier: core.blob_meta.frontier,
-            batches,
-        };
-        Ok(snap)
-    }
 }
 
 impl PersisterV1 for BlobPersister {
-    type Persistable = BlobPersistable;
+    type Write = BlobPersistable;
+    type Meta = BlobPersistable;
 
-    fn create_or_load(&mut self, id: PersistedId) -> Result<Persistable<BlobPersistable>, Error> {
-        let persistable = BlobPersistable {
+    fn create_or_load(
+        &mut self,
+        id: PersistedId,
+    ) -> Result<Persistable<Self::Write, Self::Meta>, Error> {
+        let write = BlobPersistable {
             id,
             core: self.core.clone(),
         };
-        let _snap = {
-            let blob_snap = self.blob_snapshot()?;
-            let core = self.core.lock()?;
-            let wal_snap = core.buf.snapshot(id, blob_snap.frontier)?;
-            Box::new(PairSnapshot {
-                s1: Box::new(blob_snap) as Box<dyn Snapshot>,
-                s2: wal_snap,
-            })
+        let meta = BlobPersistable {
+            id,
+            core: self.core.clone(),
         };
-        let _meta = Box::new(BlobMeta {
-            _id: id,
-            _core: self.core.clone(),
-        });
-        Ok(Persistable { id, p: persistable })
+        Ok(Persistable { id, write, meta })
     }
 
     fn destroy(&mut self, id: PersistedId) -> Result<(), Error> {
@@ -161,25 +153,39 @@ impl PersisterV1 for BlobPersister {
 }
 
 impl PersisterV2 for BlobPersister {
-    type Persistable = BlobPersistable;
+    type Write = BlobPersistable;
+    type Meta = BlobPersistable;
 }
 
+#[derive(Clone)]
 pub struct BlobPersistable {
     id: PersistedId,
     core: Arc<Mutex<BlobPersisterCore>>,
 }
 
-impl PersistableV1 for BlobPersistable {
-    fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error> {
+impl WriteV1 for BlobPersistable {
+    fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
         let mut core = self.core.lock()?;
         core.buf.write_sync(self.id, updates)?;
         // WIP well this is unfortunate
         let mut batcher_updates = updates
             .iter()
-            .map(|((k, v), t, r)| ((k.clone(), v.clone()), *t, *r))
+            .map(|((k, v), t, r)| ((k.clone(), v.clone()), *t, *r as i64))
             .collect();
         core.batcher.push_batch(&mut batcher_updates);
         Ok(())
+    }
+}
+
+impl MetaV1 for BlobPersistable {
+    type Snapshot = PairSnapshot;
+
+    fn snapshot(&self) -> Result<Self::Snapshot, Error> {
+        let mut core = self.core.lock()?;
+        let blob_snap = core.blob_snapshot()?;
+        let wal_snap = core.buf.snapshot(self.id, blob_snap.frontier)?;
+        let snap = PairSnapshot::new(Box::new(blob_snap) as Box<dyn Snapshot>, wal_snap);
+        Ok(snap)
     }
 
     fn advance(&mut self, ts: u64) {
@@ -211,9 +217,15 @@ impl PersistableV1 for BlobPersistable {
             .set("META".as_bytes(), encoded)
             .expect("WIP");
     }
+
+    fn allow_compaction(&mut self, ts: u64) {
+        todo!()
+    }
 }
 
-impl PersistableV2 for BlobPersistable {
+impl WriteV2 for BlobPersistable {}
+
+impl MetaV2 for BlobPersistable {
     fn arranged<G>(&self, mut scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
     where
         G: Scope,
@@ -248,7 +260,7 @@ struct BlobSnapshot {
 }
 
 impl Snapshot for BlobSnapshot {
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
+    fn read(&mut self, buf: &mut Vec<((String, String), u64, isize)>) -> bool {
         let batch = match self.batches.pop() {
             Some(batch) => batch,
             None => return false,
@@ -261,7 +273,7 @@ impl Snapshot for BlobSnapshot {
                 let key = cursor.key(&batch);
                 let val = cursor.val(&batch);
                 cursor.map_times(&batch, |ts, r| {
-                    buf.push(((key.clone(), val.clone()), ts.clone(), *r as i64));
+                    buf.push(((key.clone(), val.clone()), ts.clone(), *r));
                 });
                 cursor.step_val(&batch);
             }
