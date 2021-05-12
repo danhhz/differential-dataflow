@@ -8,21 +8,18 @@ use abomonation::{decode, encode};
 use abomonation_derive::Abomonation;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::cursor::CursorList;
+
 use differential_dataflow::trace::implementations::ord::OrdValBatch;
-use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor, TraceReader};
+use differential_dataflow::trace::{Batch, BatchReader, Batcher, Cursor};
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::Scope;
 use timely::progress::Antichain;
-use timely::progress::Timestamp;
-use timely::PartialOrder;
 
-use crate::abom::AbomonatedBatch;
 use crate::error::Error;
-use crate::{
-    PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
-    PersistedStreamWrite, Persister,
-};
+use crate::persister::{PersistableV1, PersistableV2, PersisterV1, PersisterV2};
+use crate::trace::abom::AbomonatedBatch;
+use crate::trace::PersistedTrace;
+use crate::{PairSnapshot, Persistable, PersistedId, Snapshot};
 
 // WIP: feature gate the following
 pub mod file;
@@ -37,40 +34,36 @@ pub trait Blob {
 pub trait Buffer {
     fn write_sync(
         &mut self,
-        id: u64,
+        id: PersistedId,
         updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
     ) -> Result<(), Error>;
-    fn snapshot(
-        &self,
-        id: u64,
-        lower: Option<u64>,
-    ) -> Result<Box<dyn PersistedStreamSnapshot>, Error>;
+    fn snapshot(&self, id: PersistedId, lower: Option<u64>) -> Result<Box<dyn Snapshot>, Error>;
 }
 
 #[derive(Abomonation, Clone)]
-struct BatchMeta {
+pub(crate) struct BatchMeta {
     // TODO: Add some debug_asserts to verify that this matches the frontier
     // represented by the batches.
-    frontier: Option<u64>,
-    batch_keys: Vec<String>,
+    pub(crate) frontier: Option<u64>,
+    pub(crate) batch_keys: Vec<String>,
 }
 
-struct BlobPersisterCore {
-    batcher: <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
+pub(crate) struct BlobPersisterCore {
+    pub(crate) batcher: <OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize> as Batch<
         Vec<u8>,
         Vec<u8>,
         u64,
         i64,
     >>::Batcher,
-    blob_meta: BatchMeta,
-    blob: Box<dyn Blob>,
-    buf: Box<dyn Buffer>,
+    pub(crate) blob_meta: BatchMeta,
+    pub(crate) blob: Box<dyn Blob>,
+    pub(crate) buf: Box<dyn Buffer>,
     // TODO: LRU
-    blob_cache: HashMap<String, AbomonatedBatch>,
+    pub(crate) blob_cache: HashMap<String, AbomonatedBatch>,
 }
 
 impl BlobPersisterCore {
-    fn get_blob(&mut self, key: &String) -> Result<Option<AbomonatedBatch>, Error> {
+    pub(crate) fn get_blob(&mut self, key: &String) -> Result<Option<AbomonatedBatch>, Error> {
         if let Some(batch) = self.blob_cache.get(key) {
             return Ok(Some(batch.clone()));
         }
@@ -138,61 +131,45 @@ impl BlobPersister {
     }
 }
 
-impl Persister for BlobPersister {
-    fn create_or_load(&mut self, id: u64) -> Result<(PersistableStream, PersistableMeta), Error> {
-        let write = Box::new(BlobWrite {
+impl PersisterV1 for BlobPersister {
+    type Persistable = BlobPersistable;
+
+    fn create_or_load(&mut self, id: PersistedId) -> Result<Persistable<BlobPersistable>, Error> {
+        let persistable = BlobPersistable {
             id,
             core: self.core.clone(),
-        }) as Box<dyn PersistedStreamWrite>;
-        let snap = {
+        };
+        let _snap = {
             let blob_snap = self.blob_snapshot()?;
             let core = self.core.lock()?;
             let wal_snap = core.buf.snapshot(id, blob_snap.frontier)?;
             Box::new(PairSnapshot {
-                s1: Box::new(blob_snap) as Box<dyn PersistedStreamSnapshot>,
+                s1: Box::new(blob_snap) as Box<dyn Snapshot>,
                 s2: wal_snap,
-            }) as Box<dyn PersistedStreamSnapshot>
+            })
         };
-        let meta = Box::new(BlobMeta {
-            id,
-            core: self.core.clone(),
+        let _meta = Box::new(BlobMeta {
+            _id: id,
+            _core: self.core.clone(),
         });
-        Ok((PersistableStream(write, snap), PersistableMeta(meta)))
+        Ok(Persistable { id, p: persistable })
     }
 
-    fn arranged<G>(
-        &self,
-        mut scope: G,
-        _id: u64,
-    ) -> Result<Arranged<G, crate::PersistedTraceReader>, Error>
-    where
-        G: Scope,
-        G::Timestamp: Lattice + Ord,
-    {
-        let stream = {
-            // WIP this needs to be an operator so it doesn't just snapshot
-            let mut core = self.core.lock()?;
-            // WIP unfortunate extra clone
-            let batch_keys = core.blob_meta.batch_keys.clone();
-            // WIP check this filter condition. also sanity check that the batches
-            // line up with no holes
-            let batches = batch_keys
-                .iter()
-                .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
-                .collect::<Vec<_>>();
-            batches.to_stream(&mut scope)
-        };
-        let trace = PersistedTraceReader::new(self.core.clone());
-        Ok(Arranged { stream, trace })
+    fn destroy(&mut self, id: PersistedId) -> Result<(), Error> {
+        todo!()
     }
 }
 
-pub struct BlobWrite {
-    id: u64,
+impl PersisterV2 for BlobPersister {
+    type Persistable = BlobPersistable;
+}
+
+pub struct BlobPersistable {
+    id: PersistedId,
     core: Arc<Mutex<BlobPersisterCore>>,
 }
 
-impl PersistedStreamWrite for BlobWrite {
+impl PersistableV1 for BlobPersistable {
     fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error> {
         let mut core = self.core.lock()?;
         core.buf.write_sync(self.id, updates)?;
@@ -204,14 +181,7 @@ impl PersistedStreamWrite for BlobWrite {
         core.batcher.push_batch(&mut batcher_updates);
         Ok(())
     }
-}
 
-pub struct BlobMeta {
-    id: u64,
-    core: Arc<Mutex<BlobPersisterCore>>,
-}
-
-impl PersistedStreamMeta for BlobMeta {
     fn advance(&mut self, ts: u64) {
         let mut core = self.core.lock().expect("WIP");
         if core.batcher.frontier().less_than(&ts) {
@@ -223,7 +193,7 @@ impl PersistedStreamMeta for BlobMeta {
         unsafe { encode(&batch, &mut encoded).expect("WIP") };
         let batch_name = format!(
             "{}-{}-{}.batch",
-            self.id,
+            self.id.0,
             batch.lower().elements().first().unwrap_or(&0),
             ts
         );
@@ -241,14 +211,35 @@ impl PersistedStreamMeta for BlobMeta {
             .set("META".as_bytes(), encoded)
             .expect("WIP");
     }
+}
 
-    fn allow_compaction(&mut self, _ts: u64) {
-        todo!()
+impl PersistableV2 for BlobPersistable {
+    fn arranged<G>(&self, mut scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
+    where
+        G: Scope,
+        G::Timestamp: Lattice,
+    {
+        let stream = {
+            // WIP this needs to be an operator so it doesn't just snapshot
+            let mut core = self.core.lock()?;
+            // WIP unfortunate extra clone
+            let batch_keys = core.blob_meta.batch_keys.clone();
+            // WIP check this filter condition. also sanity check that the batches
+            // line up with no holes
+            let batches = batch_keys
+                .iter()
+                .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
+                .collect::<Vec<_>>();
+            batches.to_stream(&mut scope)
+        };
+        let trace = PersistedTrace::new(self.core.clone());
+        Ok(Arranged { stream, trace })
     }
+}
 
-    fn destroy(&mut self) -> Result<(), Error> {
-        todo!()
-    }
+pub struct BlobMeta {
+    _id: PersistedId,
+    _core: Arc<Mutex<BlobPersisterCore>>,
 }
 
 struct BlobSnapshot {
@@ -256,7 +247,7 @@ struct BlobSnapshot {
     batches: Vec<AbomonatedBatch>,
 }
 
-impl PersistedStreamSnapshot for BlobSnapshot {
+impl Snapshot for BlobSnapshot {
     fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         let batch = match self.batches.pop() {
             Some(batch) => batch,
@@ -280,116 +271,7 @@ impl PersistedStreamSnapshot for BlobSnapshot {
     }
 }
 
-struct PairSnapshot {
-    s1: Box<dyn PersistedStreamSnapshot>,
-    s2: Box<dyn PersistedStreamSnapshot>,
-}
-
-impl PersistedStreamSnapshot for PairSnapshot {
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
-        self.s1.read(buf) || self.s2.read(buf)
-    }
-}
-
-#[derive(Clone)]
-pub struct PersistedTraceReader {
-    core: Arc<Mutex<BlobPersisterCore>>,
-    logical_compaction: Antichain<u64>,
-    physical_compaction: Antichain<u64>,
-}
-
-impl PersistedTraceReader {
-    fn new(core: Arc<Mutex<BlobPersisterCore>>) -> Self {
-        PersistedTraceReader {
-            core,
-            logical_compaction: Antichain::from_elem(u64::minimum()),
-            physical_compaction: Antichain::from_elem(u64::minimum()),
-        }
-    }
-}
-
-impl TraceReader for PersistedTraceReader {
-    type Key = Vec<u8>;
-
-    type Val = Vec<u8>;
-
-    type Time = u64;
-
-    type R = isize;
-
-    type Batch = AbomonatedBatch;
-
-    type Cursor = CursorList<
-        Vec<u8>,
-        Vec<u8>,
-        u64,
-        isize,
-        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
-    >;
-
-    fn cursor_through(
-        &mut self,
-        upper: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) -> Option<(
-        Self::Cursor,
-        <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
-    )> {
-        let mut core = self.core.lock().expect("WIP");
-        // WIP unfortunate extra clone
-        let batch_keys = core.blob_meta.batch_keys.clone();
-        // WIP check this filter condition. also sanity check that the batches
-        // line up with no holes
-        let storage = batch_keys
-            .iter()
-            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
-            .filter(|b| PartialOrder::less_equal(&b.upper().borrow(), &upper))
-            .collect::<Vec<_>>();
-        let cursors = storage.iter().map(|b| b.cursor()).collect();
-        Some((CursorList::new(cursors, &storage), storage))
-    }
-
-    fn set_logical_compaction(
-        &mut self,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) {
-        self.logical_compaction.clear();
-        self.logical_compaction.extend(frontier.iter().cloned());
-    }
-
-    fn get_logical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
-        self.logical_compaction.borrow()
-    }
-
-    fn set_physical_compaction(
-        &mut self,
-        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
-    ) {
-        debug_assert!(timely::PartialOrder::less_equal(
-            &self.physical_compaction.borrow(),
-            &frontier
-        ));
-        self.physical_compaction.clear();
-        self.physical_compaction.extend(frontier.iter().cloned());
-    }
-
-    fn get_physical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
-        self.physical_compaction.borrow()
-    }
-
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
-        let mut core = self.core.lock().expect("WIP");
-        // WIP unfortunate extra clone
-        let batch_keys = core.blob_meta.batch_keys.clone();
-        let batches = batch_keys
-            .iter()
-            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"));
-        for batch in batches {
-            f(&batch)
-        }
-    }
-}
-
-#[cfg(test)]
+#[cfg(proc_macro)]
 mod tests {
     use std::error::Error;
 

@@ -7,7 +7,7 @@ use abomonation_derive::Abomonation;
 
 use crate::error::Error;
 use crate::storage::Buffer;
-use crate::PersistedStreamSnapshot;
+use crate::{PersistedId, Snapshot};
 
 pub struct Config {}
 
@@ -33,11 +33,11 @@ struct WalEntry {
 impl Buffer for FileBuffer {
     fn write_sync(
         &mut self,
-        id: u64,
+        id: PersistedId,
         updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
     ) -> Result<(), Error> {
         let entry = WalEntry {
-            id: id,
+            id: id.0,
             updates: updates.to_vec(),
         };
         let mut buf = Vec::new();
@@ -48,18 +48,14 @@ impl Buffer for FileBuffer {
         Ok(())
     }
 
-    fn snapshot(
-        &self,
-        id: u64,
-        lower: Option<u64>,
-    ) -> Result<Box<dyn PersistedStreamSnapshot>, Error> {
+    fn snapshot(&self, id: PersistedId, lower: Option<u64>) -> Result<Box<dyn Snapshot>, Error> {
         let s = FileWalSnapshot {
-            id,
+            id: id.0,
             lower,
             // WIP lol this is terrible
             dataz: self.dataz.lock()?.clone(),
         };
-        Ok(Box::new(s) as Box<dyn PersistedStreamSnapshot>)
+        Ok(Box::new(s) as Box<dyn Snapshot>)
     }
 }
 
@@ -69,7 +65,7 @@ pub struct FileWalSnapshot {
     dataz: Vec<Vec<u8>>,
 }
 
-impl PersistedStreamSnapshot for FileWalSnapshot {
+impl Snapshot for FileWalSnapshot {
     fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
         while let Some(mut dataz) = self.dataz.pop() {
             let entry = unsafe { abomonation::decode::<WalEntry>(&mut dataz) };

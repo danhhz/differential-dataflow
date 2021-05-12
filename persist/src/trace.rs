@@ -2,10 +2,213 @@
 
 use std::cmp;
 use std::marker::PhantomData;
+use std::sync::{Arc, Mutex};
 
 use capnp::serialize;
-use differential_dataflow::trace::{BatchReader, Cursor, Description};
+use differential_dataflow::trace::cursor::CursorList;
+use differential_dataflow::trace::{BatchReader, Cursor, Description, TraceReader};
 use timely::progress::frontier::Antichain;
+use timely::progress::Timestamp;
+use timely::PartialOrder;
+
+use crate::storage::BlobPersisterCore;
+use crate::trace::abom::AbomonatedBatch;
+
+#[derive(Clone)]
+pub struct PersistedTrace {
+    core: Arc<Mutex<BlobPersisterCore>>,
+    logical_compaction: Antichain<u64>,
+    physical_compaction: Antichain<u64>,
+}
+
+impl PersistedTrace {
+    pub(crate) fn new(core: Arc<Mutex<BlobPersisterCore>>) -> Self {
+        PersistedTrace {
+            core,
+            logical_compaction: Antichain::from_elem(u64::minimum()),
+            physical_compaction: Antichain::from_elem(u64::minimum()),
+        }
+    }
+}
+
+impl TraceReader for PersistedTrace {
+    type Key = Vec<u8>;
+
+    type Val = Vec<u8>;
+
+    type Time = u64;
+
+    type R = isize;
+
+    type Batch = AbomonatedBatch;
+
+    type Cursor = CursorList<
+        Vec<u8>,
+        Vec<u8>,
+        u64,
+        isize,
+        <AbomonatedBatch as BatchReader<Vec<u8>, Vec<u8>, u64, isize>>::Cursor,
+    >;
+
+    fn cursor_through(
+        &mut self,
+        upper: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) -> Option<(
+        Self::Cursor,
+        <Self::Cursor as Cursor<Self::Key, Self::Val, Self::Time, Self::R>>::Storage,
+    )> {
+        let mut core = self.core.lock().expect("WIP");
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        // WIP check this filter condition. also sanity check that the batches
+        // line up with no holes
+        let storage = batch_keys
+            .iter()
+            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"))
+            .filter(|b| PartialOrder::less_equal(&b.upper().borrow(), &upper))
+            .collect::<Vec<_>>();
+        let cursors = storage.iter().map(|b| b.cursor()).collect();
+        Some((CursorList::new(cursors, &storage), storage))
+    }
+
+    fn set_logical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        self.logical_compaction.clear();
+        self.logical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_logical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.logical_compaction.borrow()
+    }
+
+    fn set_physical_compaction(
+        &mut self,
+        frontier: timely::progress::frontier::AntichainRef<Self::Time>,
+    ) {
+        debug_assert!(timely::PartialOrder::less_equal(
+            &self.physical_compaction.borrow(),
+            &frontier
+        ));
+        self.physical_compaction.clear();
+        self.physical_compaction.extend(frontier.iter().cloned());
+    }
+
+    fn get_physical_compaction(&mut self) -> timely::progress::frontier::AntichainRef<Self::Time> {
+        self.physical_compaction.borrow()
+    }
+
+    fn map_batches<F: FnMut(&Self::Batch)>(&self, mut f: F) {
+        let mut core = self.core.lock().expect("WIP");
+        // WIP unfortunate extra clone
+        let batch_keys = core.blob_meta.batch_keys.clone();
+        let batches = batch_keys
+            .iter()
+            .map(|key| core.get_blob(key).expect("WIP").expect("WIP"));
+        for batch in batches {
+            f(&batch)
+        }
+    }
+}
+
+// WIP I couldn't get the types happy with the existing stuff so I had to make
+// these unfortunate wrappers
+pub(crate) mod abom {
+    use std::sync::Arc;
+
+    use abomonation::abomonated::Abomonated;
+    use differential_dataflow::trace::abomonated_blanket_impls::AbomonatedBatchCursor;
+    use differential_dataflow::trace::implementations::ord::OrdValBatch;
+    use differential_dataflow::trace::{BatchReader, Cursor};
+
+    pub struct AbomonatedBatch(
+        pub Arc<Abomonated<OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>, Vec<u8>>>,
+    );
+
+    impl Clone for AbomonatedBatch {
+        fn clone(&self) -> Self {
+            AbomonatedBatch(self.0.clone())
+        }
+    }
+
+    impl BatchReader<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedBatch {
+        type Cursor = AbomonatedCursor;
+
+        fn cursor(&self) -> Self::Cursor {
+            AbomonatedCursor(self.0.cursor())
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn description(&self) -> &differential_dataflow::trace::Description<u64> {
+            self.0.description()
+        }
+    }
+
+    pub struct AbomonatedCursor(
+        AbomonatedBatchCursor<
+            Vec<u8>,
+            Vec<u8>,
+            u64,
+            i64,
+            OrdValBatch<Vec<u8>, Vec<u8>, u64, i64, usize>,
+        >,
+    );
+
+    impl Cursor<Vec<u8>, Vec<u8>, u64, isize> for AbomonatedCursor {
+        type Storage = AbomonatedBatch;
+
+        fn key_valid(&self, storage: &Self::Storage) -> bool {
+            self.0.key_valid(&storage.0)
+        }
+
+        fn val_valid(&self, storage: &Self::Storage) -> bool {
+            self.0.val_valid(&storage.0)
+        }
+
+        fn key<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
+            self.0.key(&storage.0)
+        }
+
+        fn val<'a>(&self, storage: &'a Self::Storage) -> &'a Vec<u8> {
+            self.0.val(&storage.0)
+        }
+
+        fn map_times<L: FnMut(&u64, &isize)>(&mut self, storage: &Self::Storage, mut logic: L) {
+            self.0
+                .map_times(&storage.0, |t, r| logic(t, &(*r as isize)))
+        }
+
+        fn step_key(&mut self, storage: &Self::Storage) {
+            self.0.step_key(&storage.0)
+        }
+
+        fn seek_key(&mut self, storage: &Self::Storage, key: &Vec<u8>) {
+            self.0.seek_key(&storage.0, key)
+        }
+
+        fn step_val(&mut self, storage: &Self::Storage) {
+            self.0.step_val(&storage.0)
+        }
+
+        fn seek_val(&mut self, storage: &Self::Storage, val: &Vec<u8>) {
+            self.0.seek_val(&storage.0, val)
+        }
+
+        fn rewind_keys(&mut self, storage: &Self::Storage) {
+            self.0.rewind_keys(&storage.0)
+        }
+
+        fn rewind_vals(&mut self, storage: &Self::Storage) {
+            self.0.rewind_vals(&storage.0)
+        }
+    }
+}
+
+// CAPNP EXPERIMENTS BELOW
 
 pub mod capnpgen {
     mod trace_capnp {

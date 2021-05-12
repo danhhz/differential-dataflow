@@ -46,3 +46,8 @@ TODO overview
 - Blobs (think S3) should likely be cached in some sort of LRU. Unclear where
   this lives. I originally was thinking inside the S3Blob impl, but maybe we
   want it to be after decode? Dunno.
+- What's our story with poisoned mutexes?
+- This should hook into the materialize error reporting.
+- Figure out compactions.
+- Tests for multiple persisted streams.
+- Where do the various pieces live (mz/dd/new crate) ?

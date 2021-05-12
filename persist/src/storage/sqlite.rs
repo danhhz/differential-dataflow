@@ -1,22 +1,18 @@
 //! WIP
 
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::sync::{Arc, Mutex};
 
-use differential_dataflow::operators::arrange::Arranged;
-
 use crate::error::Error;
-use crate::{
-    PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
-    PersistedStreamWrite, Persister,
-};
+use crate::persister::{PersistableV1, PersisterV1};
+use crate::{Persistable, PersistedId};
 
 // TODO: Real SQLite impl.
 
 pub struct Config {}
 
 pub struct SQLiteManager {
-    dataz: HashMap<u64, Arc<Mutex<Vec<((Vec<u8>, Vec<u8>), u64, i64)>>>>,
+    dataz: HashMap<PersistedId, Arc<Mutex<Vec<((Vec<u8>, Vec<u8>), u64, i64)>>>>,
 }
 
 impl SQLiteManager {
@@ -27,31 +23,37 @@ impl SQLiteManager {
     }
 }
 
-impl Persister for SQLiteManager {
-    fn create_or_load(&mut self, id: u64) -> Result<(PersistableStream, PersistableMeta), Error> {
-        let dataz = self.dataz.entry(id).or_default();
-        let writer = Box::new(SQLite {
+impl PersisterV1 for SQLiteManager {
+    type Persistable = SQLite;
+
+    fn create_or_load(&mut self, id: PersistedId) -> Result<Persistable<SQLite>, Error> {
+        let dataz = match self.dataz.entry(id) {
+            hash_map::Entry::Occupied(_) => {
+                return Err(Error::String(format!("id already registered: {}", id.0)))
+            }
+            hash_map::Entry::Vacant(e) => e.insert(Default::default()),
+        };
+        let persistable = SQLite {
             dataz: dataz.clone(),
-        });
-        let snapshot = Box::new(SQLiteSnapshot {
+        };
+        let _snapshot = Box::new(SQLiteSnapshot {
             dataz: dataz.lock()?.clone(),
         });
-        let meta = Box::new(SQLite {
+        let _meta = Box::new(SQLite {
             dataz: dataz.clone(),
         });
-        Ok((PersistableStream(writer, snapshot), PersistableMeta(meta)))
+        Ok(Persistable { id, p: persistable })
     }
 
-    fn arranged<G>(
-        &self,
-        _scope: G,
-        _id: u64,
-    ) -> Result<Arranged<G, crate::PersistedTraceReader>, Error>
-    where
-        G: timely::dataflow::Scope,
-        G::Timestamp: differential_dataflow::lattice::Lattice + Ord,
-    {
-        todo!()
+    fn destroy(&mut self, id: PersistedId) -> Result<(), Error> {
+        if let Some(_) = self.dataz.remove_entry(&id) {
+            Ok(())
+        } else {
+            Err(Error::String(format!(
+                "could not destroy unregistered id: {}",
+                id.0
+            )))
+        }
     }
 }
 
@@ -60,23 +62,12 @@ pub struct SQLite {
     dataz: Arc<Mutex<Vec<((Vec<u8>, Vec<u8>), u64, i64)>>>,
 }
 
-impl PersistedStreamWrite for SQLite {
+impl PersistableV1 for SQLite {
     fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error> {
         self.dataz.lock().expect("WIP").extend_from_slice(updates);
         Ok(())
     }
-}
-
-impl PersistedStreamMeta for SQLite {
-    fn advance(&mut self, _ts: u64) {
-        todo!()
-    }
-
-    fn allow_compaction(&mut self, _ts: u64) {
-        todo!()
-    }
-
-    fn destroy(&mut self) -> Result<(), Error> {
+    fn advance(&mut self, ts: u64) {
         todo!()
     }
 }
@@ -85,9 +76,9 @@ pub struct SQLiteSnapshot {
     dataz: Vec<((Vec<u8>, Vec<u8>), u64, i64)>,
 }
 
-impl PersistedStreamSnapshot for SQLiteSnapshot {
-    fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
-        buf.append(&mut self.dataz);
-        return false;
-    }
-}
+// impl PersistedStreamSnapshot for SQLiteSnapshot {
+//     fn read(&mut self, buf: &mut Vec<((Vec<u8>, Vec<u8>), u64, i64)>) -> bool {
+//         buf.append(&mut self.dataz);
+//         return false;
+//     }
+// }
