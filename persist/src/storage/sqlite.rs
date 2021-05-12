@@ -1,9 +1,11 @@
 //! WIP
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::operators::arrange::Arranged;
+
+use crate::error::Error;
 use crate::{
     PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
     PersistedStreamWrite, Persister,
@@ -18,7 +20,7 @@ pub struct SQLiteManager {
 }
 
 impl SQLiteManager {
-    pub fn new(_c: Config) -> Result<Self, Box<dyn Error>> {
+    pub fn new(_c: Config) -> Result<Self, Error> {
         Ok(SQLiteManager {
             dataz: HashMap::new(),
         })
@@ -26,16 +28,13 @@ impl SQLiteManager {
 }
 
 impl Persister for SQLiteManager {
-    fn create_or_load(
-        &mut self,
-        id: u64,
-    ) -> Result<(PersistableStream, PersistableMeta), Box<dyn Error>> {
+    fn create_or_load(&mut self, id: u64) -> Result<(PersistableStream, PersistableMeta), Error> {
         let dataz = self.dataz.entry(id).or_default();
         let writer = Box::new(SQLite {
             dataz: dataz.clone(),
         });
         let snapshot = Box::new(SQLiteSnapshot {
-            dataz: dataz.lock().expect("WIP").clone(),
+            dataz: dataz.lock()?.clone(),
         });
         let meta = Box::new(SQLite {
             dataz: dataz.clone(),
@@ -47,7 +46,7 @@ impl Persister for SQLiteManager {
         &self,
         _scope: G,
         _id: u64,
-    ) -> differential_dataflow::operators::arrange::Arranged<G, crate::PersistedTraceReader>
+    ) -> Result<Arranged<G, crate::PersistedTraceReader>, Error>
     where
         G: timely::dataflow::Scope,
         G::Timestamp: differential_dataflow::lattice::Lattice + Ord,
@@ -62,10 +61,7 @@ pub struct SQLite {
 }
 
 impl PersistedStreamWrite for SQLite {
-    fn write_sync(
-        &mut self,
-        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
-    ) -> Result<(), Box<dyn Error>> {
+    fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error> {
         self.dataz.lock().expect("WIP").extend_from_slice(updates);
         Ok(())
     }
@@ -80,7 +76,7 @@ impl PersistedStreamMeta for SQLite {
         todo!()
     }
 
-    fn destroy(&mut self) -> Result<(), Box<dyn Error>> {
+    fn destroy(&mut self) -> Result<(), Error> {
         todo!()
     }
 }

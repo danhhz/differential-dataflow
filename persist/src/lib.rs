@@ -1,6 +1,5 @@
 //! WIP
 
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::Lattice;
@@ -9,9 +8,11 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::{Concat, Operator, ToStream};
 use timely::dataflow::{Scope, Stream};
 
+use crate::error::Error;
 use crate::storage::sqlite::SQLiteManager;
 use crate::storage::PersistedTraceReader;
 
+pub mod error;
 pub mod storage;
 pub mod trace;
 
@@ -43,29 +44,27 @@ impl<R: Persister> PersistManager<R> {
     pub fn create_or_load(
         &mut self,
         id: u64,
-    ) -> Result<(PersistableStream, PersistableMeta), Box<dyn Error>> {
-        self.persister.lock().expect("WIP").create_or_load(id)
+    ) -> Result<(PersistableStream, PersistableMeta), Error> {
+        self.persister.lock()?.create_or_load(id)
     }
 }
 
 pub trait Persister {
     // WIP it's wierd for this to just return rando boxed traits
-    fn create_or_load(
-        &mut self,
-        id: u64,
-    ) -> Result<(PersistableStream, PersistableMeta), Box<dyn Error>>;
+    fn create_or_load(&mut self, id: u64) -> Result<(PersistableStream, PersistableMeta), Error>;
 
-    fn arranged<G>(&self, scope: G, id: u64) -> Arranged<G, PersistedTraceReader>
+    fn arranged<G>(
+        &self,
+        scope: G,
+        id: u64,
+    ) -> Result<Arranged<G, crate::PersistedTraceReader>, Error>
     where
         G: Scope,
         G::Timestamp: Lattice + Ord;
 }
 
 pub trait PersistedStreamWrite {
-    fn write_sync(
-        &mut self,
-        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
-    ) -> Result<(), Box<dyn Error>>;
+    fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error>;
 }
 
 pub trait PersistedStreamSnapshot {
@@ -76,7 +75,7 @@ pub trait PersistedStreamSnapshot {
 pub trait PersistedStreamMeta {
     fn advance(&mut self, ts: u64);
     fn allow_compaction(&mut self, ts: u64);
-    fn destroy(&mut self) -> Result<(), Box<dyn Error>>;
+    fn destroy(&mut self) -> Result<(), Error>;
 }
 
 // NB: intentionally not Clone
@@ -422,7 +421,7 @@ mod tests {
 
             worker.dataflow(|scope| {
                 let send = send.lock().expect("WIP").clone();
-                let manages_arranged = p.arranged(scope.clone(), 1);
+                let manages_arranged = p.arranged(scope.clone(), 1).expect("WIP");
                 let manages = manages_arranged
                     .stream
                     .flat_map(|b| {

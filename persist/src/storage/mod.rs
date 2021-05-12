@@ -1,7 +1,6 @@
 //! WIP
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use abomonation::abomonated::Abomonated;
@@ -19,6 +18,7 @@ use timely::progress::Timestamp;
 use timely::PartialOrder;
 
 use crate::abom::AbomonatedBatch;
+use crate::error::Error;
 use crate::{
     PersistableMeta, PersistableStream, PersistedStreamMeta, PersistedStreamSnapshot,
     PersistedStreamWrite, Persister,
@@ -30,8 +30,8 @@ pub mod s3;
 pub mod sqlite;
 
 pub trait Blob {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
-    fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), Box<dyn Error>>;
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Error>;
+    fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), Error>;
 }
 
 pub trait Buffer {
@@ -39,12 +39,12 @@ pub trait Buffer {
         &mut self,
         id: u64,
         updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
-    ) -> Result<(), Box<dyn Error>>;
+    ) -> Result<(), Error>;
     fn snapshot(
         &self,
         id: u64,
         lower: Option<u64>,
-    ) -> Result<Box<dyn PersistedStreamSnapshot>, Box<dyn Error>>;
+    ) -> Result<Box<dyn PersistedStreamSnapshot>, Error>;
 }
 
 #[derive(Abomonation, Clone)]
@@ -70,7 +70,7 @@ struct BlobPersisterCore {
 }
 
 impl BlobPersisterCore {
-    fn get_blob(&mut self, key: &String) -> Result<Option<AbomonatedBatch>, Box<dyn Error>> {
+    fn get_blob(&mut self, key: &String) -> Result<Option<AbomonatedBatch>, Error> {
         if let Some(batch) = self.blob_cache.get(key) {
             return Ok(Some(batch.clone()));
         }
@@ -92,7 +92,7 @@ pub struct BlobPersister {
 }
 
 impl BlobPersister {
-    pub fn new(blob: Box<dyn Blob>, buf: Box<dyn Buffer>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(blob: Box<dyn Blob>, buf: Box<dyn Buffer>) -> Result<Self, Error> {
         let blob_meta = if let Some(mut buf) = blob.get("META".as_bytes())? {
             unsafe { decode::<BatchMeta>(&mut buf) }
                 .expect("WIP")
@@ -122,13 +122,13 @@ impl BlobPersister {
         })
     }
 
-    fn blob_snapshot(&self) -> Result<BlobSnapshot, Box<dyn Error>> {
-        let mut core = self.core.lock().expect("WIP");
+    fn blob_snapshot(&self) -> Result<BlobSnapshot, Error> {
+        let mut core = self.core.lock()?;
         let mut batches = Vec::new();
         // WIP unfortunate extra clone
         let batch_keys = core.blob_meta.batch_keys.clone();
         for key in batch_keys.iter() {
-            batches.push(core.get_blob(key).expect("WIP").expect("WIP"));
+            batches.push(core.get_blob(key)?.expect("WIP"));
         }
         let snap = BlobSnapshot {
             frontier: core.blob_meta.frontier,
@@ -139,17 +139,14 @@ impl BlobPersister {
 }
 
 impl Persister for BlobPersister {
-    fn create_or_load(
-        &mut self,
-        id: u64,
-    ) -> Result<(PersistableStream, PersistableMeta), Box<dyn Error>> {
+    fn create_or_load(&mut self, id: u64) -> Result<(PersistableStream, PersistableMeta), Error> {
         let write = Box::new(BlobWrite {
             id,
             core: self.core.clone(),
         }) as Box<dyn PersistedStreamWrite>;
         let snap = {
             let blob_snap = self.blob_snapshot()?;
-            let core = self.core.lock().expect("WIP");
+            let core = self.core.lock()?;
             let wal_snap = core.buf.snapshot(id, blob_snap.frontier)?;
             Box::new(PairSnapshot {
                 s1: Box::new(blob_snap) as Box<dyn PersistedStreamSnapshot>,
@@ -163,14 +160,18 @@ impl Persister for BlobPersister {
         Ok((PersistableStream(write, snap), PersistableMeta(meta)))
     }
 
-    fn arranged<G>(&self, mut scope: G, _id: u64) -> Arranged<G, crate::PersistedTraceReader>
+    fn arranged<G>(
+        &self,
+        mut scope: G,
+        _id: u64,
+    ) -> Result<Arranged<G, crate::PersistedTraceReader>, Error>
     where
         G: Scope,
         G::Timestamp: Lattice + Ord,
     {
         let stream = {
             // WIP this needs to be an operator so it doesn't just snapshot
-            let mut core = self.core.lock().expect("WIP");
+            let mut core = self.core.lock()?;
             // WIP unfortunate extra clone
             let batch_keys = core.blob_meta.batch_keys.clone();
             // WIP check this filter condition. also sanity check that the batches
@@ -182,7 +183,7 @@ impl Persister for BlobPersister {
             batches.to_stream(&mut scope)
         };
         let trace = PersistedTraceReader::new(self.core.clone());
-        Arranged { stream, trace }
+        Ok(Arranged { stream, trace })
     }
 }
 
@@ -192,11 +193,8 @@ pub struct BlobWrite {
 }
 
 impl PersistedStreamWrite for BlobWrite {
-    fn write_sync(
-        &mut self,
-        updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
-    ) -> Result<(), Box<dyn Error>> {
-        let mut core = self.core.lock().expect("WIP");
+    fn write_sync(&mut self, updates: &[((Vec<u8>, Vec<u8>), u64, i64)]) -> Result<(), Error> {
+        let mut core = self.core.lock()?;
         core.buf.write_sync(self.id, updates)?;
         // WIP well this is unfortunate
         let mut batcher_updates = updates
@@ -248,7 +246,7 @@ impl PersistedStreamMeta for BlobMeta {
         todo!()
     }
 
-    fn destroy(&mut self) -> Result<(), Box<dyn Error>> {
+    fn destroy(&mut self) -> Result<(), Error> {
         todo!()
     }
 }

@@ -1,11 +1,11 @@
 //! WIP
 
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use abomonation;
 use abomonation_derive::Abomonation;
 
+use crate::error::Error;
 use crate::storage::Buffer;
 use crate::PersistedStreamSnapshot;
 
@@ -17,7 +17,7 @@ pub struct FileBuffer {
 }
 
 impl FileBuffer {
-    pub fn new(_c: Config) -> Result<Self, Box<dyn Error>> {
+    pub fn new(_c: Config) -> Result<Self, Error> {
         Ok(FileBuffer {
             dataz: Arc::new(Mutex::new(Vec::new())),
         })
@@ -35,7 +35,7 @@ impl Buffer for FileBuffer {
         &mut self,
         id: u64,
         updates: &[((Vec<u8>, Vec<u8>), u64, i64)],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Error> {
         let entry = WalEntry {
             id: id,
             updates: updates.to_vec(),
@@ -44,7 +44,7 @@ impl Buffer for FileBuffer {
         unsafe {
             abomonation::encode(&entry, &mut buf)?;
         }
-        self.dataz.lock().expect("WIP").push(buf);
+        self.dataz.lock()?.push(buf);
         Ok(())
     }
 
@@ -52,12 +52,12 @@ impl Buffer for FileBuffer {
         &self,
         id: u64,
         lower: Option<u64>,
-    ) -> Result<Box<dyn PersistedStreamSnapshot>, Box<dyn Error>> {
+    ) -> Result<Box<dyn PersistedStreamSnapshot>, Error> {
         let s = FileWalSnapshot {
             id,
             lower,
             // WIP lol this is terrible
-            dataz: self.dataz.lock().expect("WIP").clone(),
+            dataz: self.dataz.lock()?.clone(),
         };
         Ok(Box::new(s) as Box<dyn PersistedStreamSnapshot>)
     }
