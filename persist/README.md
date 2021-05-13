@@ -133,5 +133,9 @@ from the Buffer (or they're tee'd?) and indexes it in the necessary way.
 - Clean up the `pub(crate)`s.
 - A `String` key and `String` value are currently hardcoded, but this needs to
   be generalized.
+- Encryption at rest.
+- Backward compatibility of persisted data, particuarly the encoded keys and
+  values.
+- Restarting with a different number of workers.
 - TODO: These were my immediate thoughts but there's stuff I'm forgetting. Flesh
   this list out.
