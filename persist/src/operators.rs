@@ -49,10 +49,11 @@ impl<G: Scope<Timestamp = u64>> PersistUnarySync<G> for Stream<G, ((String, Stri
 
         let meta = PersistedMeta { meta, probe };
 
+        // WIP lol nope
         let mut replay = Vec::new();
         while snap.read(&mut replay) {}
         let replay = replay.into_iter().to_stream(&mut self.scope());
-        // let replay = vec![SnapshotIterator::new(s)].replay_core(&mut self.scope(), None);
+
         let stream = replay.concat(&capture);
 
         PersistedStream { meta, stream }

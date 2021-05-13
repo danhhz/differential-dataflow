@@ -1,6 +1,6 @@
 //! WIP
 
-use std::collections::{hash_map, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::error::Error;
@@ -29,12 +29,7 @@ impl PersisterV1 for SQLiteManager {
         &mut self,
         id: PersistedId,
     ) -> Result<Persistable<Self::Write, Self::Meta>, Error> {
-        let dataz = match self.dataz.entry(id) {
-            hash_map::Entry::Occupied(_) => {
-                return Err(Error::String(format!("id already registered: {}", id.0)))
-            }
-            hash_map::Entry::Vacant(e) => e.insert(Default::default()),
-        };
+        let dataz = self.dataz.entry(id).or_default();
         let p = SQLite {
             dataz: dataz.clone(),
         };
@@ -64,7 +59,7 @@ pub struct SQLite {
 
 impl WriteV1 for SQLite {
     fn write_sync(&mut self, updates: &[((String, String), u64, isize)]) -> Result<(), Error> {
-        self.dataz.lock().expect("WIP").extend_from_slice(updates);
+        self.dataz.lock()?.extend_from_slice(updates);
         Ok(())
     }
 }
@@ -78,13 +73,12 @@ impl MetaV1 for SQLite {
         Ok(snap)
     }
 
-    fn advance(&mut self, ts: u64) {
+    fn allow_compaction(&mut self, ts: u64) {
+        // WIP hmm this should instead keep the latest version of every key
+        // before `ts` (and I think forward every timestamp before `ts` to be
+        // `ts`)
         let mut dataz = self.dataz.lock().expect("WIP");
         dataz.retain(|(_, t, _)| *t > ts);
-    }
-
-    fn allow_compaction(&mut self, ts: u64) {
-        todo!()
     }
 }
 

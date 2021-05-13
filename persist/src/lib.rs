@@ -25,8 +25,6 @@ pub type SQLitePersistManager = PersistManager<SQLiteManager>;
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct PersistedId(pub u64);
 
-// WIP the usage of Clone, Arc, and Mutex have gotten out of control
-
 pub struct PersistManager<P> {
     persister: Arc<Mutex<P>>,
 }
@@ -64,7 +62,7 @@ impl<P: PersisterV1> PersistManager<P> {
     }
 }
 
-// NB: Intentionally not Clone
+// NB: Intentionally not Clone since it's an exclusivity token.
 pub struct Persistable<W, M> {
     id: PersistedId,
     write: W,
@@ -86,13 +84,12 @@ pub struct PersistedMeta<M> {
     probe: ProbeHandle<u64>,
 }
 
+// TODO: At the moment, PersistedMeta basically just forwards methods to a
+// MetaV1 or MetaV2. Is it worth it for the lazy probe? Maybe there's a better
+// way to do that.
 impl<M: MetaV1> PersistedMeta<M> {
     pub fn probe(&self) -> ProbeHandle<u64> {
         self.probe.clone()
-    }
-
-    pub fn advance(&mut self, ts: u64) {
-        self.meta.advance(ts)
     }
 
     pub fn allow_compaction(&mut self, ts: u64) {
@@ -101,6 +98,10 @@ impl<M: MetaV1> PersistedMeta<M> {
 }
 
 impl<M: MetaV2> PersistedMeta<M> {
+    pub fn advance(&mut self, ts: u64) {
+        self.meta.advance(ts)
+    }
+
     pub fn arranged<G>(&self, scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
     where
         G: Scope,
@@ -190,19 +191,15 @@ mod tests {
     use crate::operators::PersistCollectionSync;
     use crate::storage::file::{self, FileBuffer};
     use crate::storage::s3::{self, S3Blob};
+    use crate::storage::sqlite::SQLiteManager;
     use crate::storage::{Blob, BlobPersister, Buffer};
     use crate::{PersistManager, PersistedId};
 
+    // TODO: These tests feel super clunkly
+
     #[test]
     fn persist_collection_sync() -> Result<(), Box<dyn Error>> {
-        let id = PersistedId(1);
-        let blob = S3Blob::new(s3::Config {})?;
-        let buf = FileBuffer::new(file::Config {})?;
-        let p = BlobPersister::new(
-            Box::new(blob.clone()) as Box<dyn Blob>,
-            Box::new(buf.clone()) as Box<dyn Buffer>,
-        )?;
-        let p = PersistManager::new(p);
+        let p = PersistManager::new(SQLiteManager::new());
 
         // Initial dataflow
         let p2 = p.clone();
@@ -211,21 +208,19 @@ mod tests {
         timely::execute(Config::thread(), move |worker| {
             let mut input = InputSession::new();
             let mut p2 = p2.clone();
-            let (probe, mut meta) = worker.dataflow(|scope| {
+            let probe = worker.dataflow(|scope| {
                 let mut probe = ProbeHandle::new();
                 let send = send.lock().expect("WIP").clone();
 
-                let persister = p2.create_or_load(id).expect("WIP");
-                let manages = input
+                let persister = p2.create_or_load(PersistedId(1)).expect("WIP");
+                input
                     .to_collection(scope)
-                    .persist_collection_sync(persister);
-                let meta = manages.meta().clone();
-                manages
+                    .persist_collection_sync(persister)
                     .into_collection()
                     .inner
                     .probe_with(&mut probe)
                     .capture_into(send);
-                (probe, meta)
+                probe
             });
             input.advance_to(0);
             for person in 1..=5 {
@@ -236,7 +231,6 @@ mod tests {
             while probe.less_than(input.time()) {
                 worker.step();
             }
-            meta.advance(3);
         })?;
 
         let first_dataflow = recv.extract();
@@ -255,7 +249,7 @@ mod tests {
                 let mut probe = ProbeHandle::new();
                 let send = send.lock().expect("WIP").clone();
 
-                let persister = p2.create_or_load(id).expect("WIP");
+                let persister = p2.create_or_load(PersistedId(1)).expect("WIP");
                 input
                     .to_collection(scope)
                     .persist_collection_sync(persister)
@@ -356,7 +350,7 @@ mod tests {
         .map(|((x, (y, z)), t, r)| {
             let (x, y, z) = (x.to_string(), y.to_string(), z.to_string());
             // Swap z and y to match the dd book since we had the wrong
-            // thing arranged for join_core.
+            // stream arranged for the opposite join_core argument ordering.
             ((x, (z, y)), t as u64, r as isize)
         })
         .collect::<Vec<_>>();

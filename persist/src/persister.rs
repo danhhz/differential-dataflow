@@ -14,13 +14,13 @@ pub trait WriteV1 {
 pub trait MetaV1: Clone {
     type Snapshot: Snapshot;
     fn snapshot(&self) -> Result<Self::Snapshot, Error>;
-    fn advance(&mut self, ts: u64);
     fn allow_compaction(&mut self, ts: u64);
 }
 
 pub trait WriteV2: WriteV1 {}
 
 pub trait MetaV2: MetaV1 {
+    fn advance(&mut self, ts: u64);
     fn arranged<G>(&self, scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
     where
         G: Scope,

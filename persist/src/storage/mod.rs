@@ -23,7 +23,6 @@ use crate::trace::abom::AbomonatedBatch;
 use crate::trace::PersistedTrace;
 use crate::{Persistable, PersistedId};
 
-// WIP: feature gate the following
 pub mod file;
 pub mod s3;
 pub mod sqlite;
@@ -188,6 +187,14 @@ impl MetaV1 for BlobPersistable {
         Ok(snap)
     }
 
+    fn allow_compaction(&mut self, ts: u64) {
+        todo!()
+    }
+}
+
+impl WriteV2 for BlobPersistable {}
+
+impl MetaV2 for BlobPersistable {
     fn advance(&mut self, ts: u64) {
         let mut core = self.core.lock().expect("WIP");
         if core.batcher.frontier().less_than(&ts) {
@@ -218,14 +225,6 @@ impl MetaV1 for BlobPersistable {
             .expect("WIP");
     }
 
-    fn allow_compaction(&mut self, ts: u64) {
-        todo!()
-    }
-}
-
-impl WriteV2 for BlobPersistable {}
-
-impl MetaV2 for BlobPersistable {
     fn arranged<G>(&self, mut scope: G) -> Result<Arranged<G, crate::trace::PersistedTrace>, Error>
     where
         G: Scope,
@@ -283,7 +282,7 @@ impl Snapshot for BlobSnapshot {
     }
 }
 
-#[cfg(proc_macro)]
+#[cfg(test)]
 mod tests {
     use std::error::Error;
 
@@ -297,21 +296,9 @@ mod tests {
         let buf = FileBuffer::new(file::Config {})?;
 
         let updates = vec![
-            (
-                ("foo-k".as_bytes().to_vec(), "foo-v".as_bytes().to_vec()),
-                1,
-                1,
-            ),
-            (
-                ("foo-k".as_bytes().to_vec(), "foo-v".as_bytes().to_vec()),
-                3,
-                -1,
-            ),
-            (
-                ("bar-k".as_bytes().to_vec(), "bar-v".as_bytes().to_vec()),
-                1,
-                1,
-            ),
+            (("foo-k".to_string(), "foo-v".to_string()), 1, 1),
+            (("foo-k".to_string(), "foo-v".to_string()), 3, -1),
+            (("bar-k".to_string(), "bar-v".to_string()), 1, 1),
         ];
 
         // Initial dataflow
@@ -321,9 +308,10 @@ mod tests {
                 Box::new(buf.clone()) as Box<dyn Buffer>,
             )?;
 
-            let (PersistableStream(mut write, mut snap), mut meta) = p.create_or_load(1)?;
+            let (mut write, mut meta) = p.create_or_load(PersistedId(1))?.consume();
             {
                 // Nothing has been written yet so snap should be empty.
+                let mut snap = meta.snapshot()?;
                 let mut buf = Vec::new();
                 assert_eq!(snap.read(&mut buf), false);
                 assert!(buf.is_empty());
@@ -333,7 +321,7 @@ mod tests {
             // Everything starts in the wal
             assert_eq!(blob.entries(), 0);
             // Move some data from the wal into the blob storage
-            meta.0.advance(1);
+            meta.advance(1);
             // The blob storage is no longer empty
             assert!(blob.entries() > 0);
         }
@@ -345,9 +333,10 @@ mod tests {
                 Box::new(buf.clone()) as Box<dyn Buffer>,
             )?;
 
-            let (PersistableStream(_write, mut snap), _meta) = p.create_or_load(1)?;
+            let (_, meta) = p.create_or_load(PersistedId(1))?.consume();
             {
                 // Verify that the snap contains the data we wrote before the restart.
+                let mut snap = meta.snapshot()?;
                 let mut snap_contents = Vec::new();
                 while snap.read(&mut snap_contents) {}
                 snap_contents.sort();
