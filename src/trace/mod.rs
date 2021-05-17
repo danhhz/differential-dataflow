@@ -197,9 +197,12 @@ pub trait TraceReader {
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
 pub trait Trace : TraceReader
-where <Self as TraceReader>::Batch: Batch<Self::KeyIn, Self::Key, Self::ValIn, Self::Val, Self::Time, Self::R> {
+where <Self as TraceReader>::Batch: Batch<Self::KeyIn, <Self as TraceReader>::Key, Self::ValIn, <Self as TraceReader>::Val, Self::Time, Self::R> {
 
+    /// WIP
     type KeyIn;
+
+    /// WIP
     type ValIn;
 
     /// Allocates a new empty trace.
@@ -327,7 +330,6 @@ pub trait Merger<KI, K: ?Sized, VI, V: ?Sized, T, R, Output: Batch<KI, K, VI, V,
 
 
 /// Blanket implementations for reference counted batches.
-#[cfg(proc_macro)]
 pub mod rc_blanket_impls {
 
     use std::rc::Rc;
@@ -391,39 +393,39 @@ pub mod rc_blanket_impls {
     }
 
     /// An immutable collection of updates.
-    impl<K,V,T,R,B: Batch<K,V,T,R>> Batch<K, V, T, R> for Rc<B> {
+    impl<K,V,T,R,B: Batch<K,K,V,V,T,R>> Batch<K, K, V, V, T, R> for Rc<B> {
         type Batcher = RcBatcher<K, V, T, R, B>;
         type Builder = RcBuilder<K, V, T, R, B>;
         type Merger = RcMerger<K, V, T, R, B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct RcBatcher<K,V,T,R,B:Batch<K,V,T,R>> { batcher: B::Batcher }
+    pub struct RcBatcher<K,V,T,R,B:Batch<K,K,V,V,T,R>> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Batcher<K, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
-        fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,V,T,R,B>>::new() } }
+    impl<K,V,T,R,B:Batch<K,K,V,V,T,R>> Batcher<K, K, V, V, T, R, Rc<B>> for RcBatcher<K,V,T,R,B> {
+        fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<K,K,V,V,T,R,B>>::new() } }
         fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
         fn frontier(&mut self) -> timely::progress::frontier::AntichainRef<T> { self.batcher.frontier() }
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<K,V,T,R,B:Batch<K,V,T,R>> { builder: B::Builder }
+    pub struct RcBuilder<K,V,T,R,B:Batch<K,K,V,V,T,R>> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Builder<K, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
-        fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::new() } }
-        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,V,T,R,B>>::with_capacity(cap) } }
+    impl<K,V,T,R,B:Batch<K,K,V,V,T,R>> Builder<K, K, V, V, T, R, Rc<B>> for RcBuilder<K,V,T,R,B> {
+        fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<K,K,V,V,T,R,B>>::new() } }
+        fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<K,K,V,V,T,R,B>>::with_capacity(cap) } }
         fn push(&mut self, element: (K, V, T, R)) { self.builder.push(element) }
         fn done(self, lower: Antichain<T>, upper: Antichain<T>, since: Antichain<T>) -> Rc<B> { Rc::new(self.builder.done(lower, upper, since)) }
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct RcMerger<K,V,T,R,B:Batch<K,V,T,R>> { merger: B::Merger }
+    pub struct RcMerger<K,V,T,R,B:Batch<K,K,V,V,T,R>> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<K,V,T,R,B:Batch<K,V,T,R>> Merger<K, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
+    impl<K,V,T,R,B:Batch<K,K,V,V,T,R>> Merger<K, K, V, V, T, R, Rc<B>> for RcMerger<K,V,T,R,B> {
         fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }

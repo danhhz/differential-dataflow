@@ -1,5 +1,7 @@
 //! WIP
 
+#![allow(unused_variables)]
+
 use std::marker::PhantomData;
 
 use timely::progress::frontier::AntichainRef;
@@ -26,14 +28,17 @@ pub struct ColBatchCursor<T, R> {
     _phantom: PhantomData<(T, R)>,
 }
 
+/// WIP
 pub struct ColBatcher<T, R> {
     _phantom: PhantomData<(T, R)>,
 }
 
+/// WIP
 pub struct ColBuilder<T, R> {
     _phantom: PhantomData<(T, R)>,
 }
 
+/// WIP
 pub struct ColMerger<T, R> {
     _phantom: PhantomData<(T, R)>,
 }
@@ -59,47 +64,47 @@ impl<T, R> BatchReader<[u8], [u8], T, R> for ColBatch<T, R> {
 impl<T, R> Cursor<[u8], [u8], T, R> for ColBatchCursor<T, R> {
     type Storage = ColBatch<T, R>;
 
-    fn key_valid(&self, _storage: &Self::Storage) -> bool {
+    fn key_valid(&self, storage: &Self::Storage) -> bool {
         todo!()
     }
 
-    fn val_valid(&self, _storage: &Self::Storage) -> bool {
+    fn val_valid(&self, storage: &Self::Storage) -> bool {
         todo!()
     }
 
-    fn key<'a>(&self, _storage: &'a Self::Storage) -> &'a [u8] {
+    fn key<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
         todo!()
     }
 
-    fn val<'a>(&self, _storage: &'a Self::Storage) -> &'a [u8] {
+    fn val<'a>(&self, storage: &'a Self::Storage) -> &'a [u8] {
         todo!()
     }
 
-    fn map_times<L: FnMut(&T, &R)>(&mut self, _storage: &Self::Storage, _logic: L) {
+    fn map_times<L: FnMut(&T, &R)>(&mut self, storage: &Self::Storage, logic: L) {
         todo!()
     }
 
-    fn step_key(&mut self, _storage: &Self::Storage) {
+    fn step_key(&mut self, storage: &Self::Storage) {
         todo!()
     }
 
-    fn seek_key(&mut self, _storage: &Self::Storage, _key: &[u8]) {
+    fn seek_key(&mut self, storage: &Self::Storage, key: &[u8]) {
         todo!()
     }
 
-    fn step_val(&mut self, _storage: &Self::Storage) {
+    fn step_val(&mut self, storage: &Self::Storage) {
         todo!()
     }
 
-    fn seek_val(&mut self, _storage: &Self::Storage, _val: &[u8]) {
+    fn seek_val(&mut self, storage: &Self::Storage, val: &[u8]) {
         todo!()
     }
 
-    fn rewind_keys(&mut self, _storage: &Self::Storage) {
+    fn rewind_keys(&mut self, storage: &Self::Storage) {
         todo!()
     }
 
-    fn rewind_vals(&mut self, _storage: &Self::Storage) {
+    fn rewind_vals(&mut self, storage: &Self::Storage) {
         todo!()
     }
 }

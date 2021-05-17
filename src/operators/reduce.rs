@@ -271,9 +271,10 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     fn reduce_abelian<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Val: Data,
+            T2::Val: Data+ToOwned<Owned=T2::ValIn>,
             T2::R: Abelian,
             T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
+            <T2 as TraceReader>::Batch: Batch<T2::KeyIn, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
@@ -294,9 +295,10 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
     fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Val: Data,
+            T2::Val: Data+ToOwned<Owned=T2::ValIn>,
             T2::R: Semigroup,
             T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
+            <T2 as TraceReader>::Batch: Batch<T2::KeyIn, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
@@ -312,10 +314,11 @@ where
 {
     fn reduce_core<L, T2>(&self, name: &str, logic: L) -> Arranged<G, TraceAgent<T2>>
         where
-            T2::Val: Data,
+            T2::Val: Data+ToOwned<Owned=T2::ValIn>,
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
+            <T2 as TraceReader>::Batch: Batch<T2::KeyIn, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
@@ -334,9 +337,10 @@ where
     fn reduce_core<L, T2>(&self, name: &str, mut logic: L) -> Arranged<G, TraceAgent<T2>>
         where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Val: Data,
+            T2::Val: Data+ToOwned<Owned=T2::ValIn>,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch<K, T1::Key, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
+            <T2 as TraceReader>::Batch: Batch<T2::KeyIn, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 
@@ -479,7 +483,7 @@ where
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
-                                builders.push(<T2::Batch as Batch<K,T2::Val,G::Timestamp,T2::R>>::Builder::new());
+                                builders.push(<T2::Batch as Batch<K,K,T2::ValIn,T2::Val,G::Timestamp,T2::R>>::Builder::new());
                             }
 
                             // cursors for navigating input and output traces.
@@ -555,7 +559,7 @@ where
                                 for index in 0 .. buffers.len() {
                                     buffers[index].1.sort_by(|x,y| x.0.cmp(&y.0));
                                     for (val, time, diff) in buffers[index].1.drain(..) {
-                                        builders[index].push((key.clone(), val, time, diff));
+                                        builders[index].push((key.clone(), val.to_owned(), time, diff));
                                     }
                                 }
                             }

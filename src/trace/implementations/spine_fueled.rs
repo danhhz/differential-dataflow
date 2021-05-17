@@ -250,6 +250,9 @@ where
     R: Semigroup,
     B: Batch<K, K, V, V, T, R>+Clone+'static,
 {
+    type KeyIn=K;
+    type ValIn=V;
+
     fn new(
         info: ::timely::dataflow::operators::generic::OperatorInfo,
         logging: Option<::logging::Logger>,
@@ -864,7 +867,7 @@ impl<K, V, T: Eq, R, B: Batch<K, K, V, V, T, R>> MergeState<K, V, T, R, B> {
         match (batch1, batch2) {
             (Some(batch1), Some(batch2)) => {
                 assert!(batch1.upper() == batch2.lower());
-                let begin_merge = <B as Batch<K, V, T, R>>::begin_merge(&batch1, &batch2, compaction_frontier);
+                let begin_merge = <B as Batch<K, K, V, V, T, R>>::begin_merge(&batch1, &batch2, compaction_frontier);
                 MergeVariant::InProgress(batch1, batch2, begin_merge)
             }
             (None, Some(x)) => MergeVariant::Complete(Some((x, None))),
