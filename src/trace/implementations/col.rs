@@ -3,11 +3,16 @@
 #![allow(unused_variables)]
 
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
 
+use crate::trace::implementations::spine_fueled::Spine;
 use crate::trace::{Batch, BatchReader, Batcher, Builder, Cursor, Description, Merger};
+
+/// WIP
+pub type ColValSpine<T, R> = Spine<Vec<u8>, [u8], Vec<u8>, [u8], T, R, Rc<ColBatch<T, R>>>;
 
 /// WIP
 pub struct ColBatch<T, R> {

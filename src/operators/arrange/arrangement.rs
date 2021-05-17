@@ -445,11 +445,11 @@ where
 ///
 /// This trait is implemented for appropriately typed collections and all traces that might accommodate them,
 /// as well as by arranged data for their corresponding trace type.
-pub trait Arrange<G: Scope, K, V, R: Semigroup>
+pub trait Arrange<G: Scope, KI, K, VI, V, R: Semigroup>
 where
     G::Timestamp: Lattice,
-    K: Data,
-    V: Data,
+    KI: Data,
+    VI: Data,
 {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
@@ -458,11 +458,12 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange<Tr>(&self) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: ExchangeData+Hashable,
-        V: ExchangeData,
+        KI: ExchangeData+Hashable,
+        VI: ExchangeData,
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, K, V, V, G::Timestamp, R>,
+        Tr::Batch: Batch<KI, K, VI, V, G::Timestamp, R>,
+        <Tr::Batch as Batch<KI, K, VI, V, G::Timestamp, R>>::Batcher: 'static,
         <Tr as TraceReader>::Batch: Batch<Tr::KeyIn, K, Tr::ValIn, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
@@ -476,15 +477,16 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_named<Tr>(&self, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        K: ExchangeData+Hashable,
-        V: ExchangeData,
+        KI: ExchangeData+Hashable,
+        VI: ExchangeData,
         R: ExchangeData,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, K, V, V, G::Timestamp, R>,
+        Tr::Batch: Batch<KI, K, VI, V, G::Timestamp, R>,
+        <Tr::Batch as Batch<KI, K, VI, V, G::Timestamp, R>>::Batcher: 'static,
         <Tr as TraceReader>::Batch: Batch<Tr::KeyIn, K, Tr::ValIn, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
-        let exchange = Exchange::new(move |update: &((K,V),G::Timestamp,R)| (update.0).0.hashed().into());
+        let exchange = Exchange::new(move |update: &((KI,VI),G::Timestamp,R)| (update.0).0.hashed().into());
         self.arrange_core(exchange, name)
     }
 
@@ -495,27 +497,29 @@ where
     /// is the correct way to determine that times in the shared trace are committed.
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, ((KI,VI),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, K, V, V, G::Timestamp, R>,
+        Tr::Batch: Batch<KI, K, VI, V, G::Timestamp, R>,
+        <Tr::Batch as Batch<KI, K, VI, V, G::Timestamp, R>>::Batcher: 'static,
         <Tr as TraceReader>::Batch: Batch<Tr::KeyIn, K, Tr::ValIn, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     ;
 }
 
-impl<G, K, V, R> Arrange<G, K, V, R> for Collection<G, (K, V), R>
+impl<G, KI, K, VI, V, R> Arrange<G, KI, K, VI, V, R> for Collection<G, (KI, VI), R>
 where
     G: Scope,
     G::Timestamp: Lattice+Ord,
-    K: ExchangeData+Hashable,
-    V: ExchangeData,
+    KI: ExchangeData+Hashable,
+    VI: ExchangeData,
     R: Semigroup+ExchangeData,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,V),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, ((KI,VI),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K,Val=V,Time=G::Timestamp,R=R>+'static,
-        Tr::Batch: Batch<K, K, V, V, G::Timestamp, R>,
+        Tr::Batch: Batch<KI, K, VI, V, G::Timestamp, R>,
+        <Tr::Batch as Batch<KI, K, VI, V, G::Timestamp, R>>::Batcher: 'static,
         <Tr as TraceReader>::Batch: Batch<Tr::KeyIn, K, Tr::ValIn, V, G::Timestamp, R>,
         Tr::Cursor: Cursor<K, V, G::Timestamp, R>,
     {
@@ -551,7 +555,7 @@ where
                 };
 
                 // Where we will deposit received updates, and from which we extract batches.
-                let mut batcher = <Tr::Batch as Batch<K,K,V,V,G::Timestamp,R>>::Batcher::new();
+                let mut batcher = <Tr::Batch as Batch<KI,K,VI,V,G::Timestamp,R>>::Batcher::new();
 
                 // Capabilities for the lower envelope of updates in `batcher`.
                 let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
@@ -682,15 +686,16 @@ where
     }
 }
 
-impl<G: Scope, K: ExchangeData+Hashable, R: ExchangeData+Semigroup> Arrange<G, K, (), R> for Collection<G, K, R>
+impl<G: Scope, KI: ExchangeData+Hashable, K, R: ExchangeData+Semigroup> Arrange<G, KI, K, (), (), R> for Collection<G, KI, R>
 where
     G::Timestamp: Lattice+Ord,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>
     where
-        P: ParallelizationContract<G::Timestamp, ((K,()),G::Timestamp,R)>,
+        P: ParallelizationContract<G::Timestamp, ((KI,()),G::Timestamp,R)>,
         Tr: Trace+TraceReader<Key=K, Val=(), Time=G::Timestamp, R=R>+'static,
-        Tr::Batch: Batch<K, K, (), (), G::Timestamp, R>,
+        Tr::Batch: Batch<KI, K, (), (), G::Timestamp, R>,
+        <Tr::Batch as Batch<KI, K, (), (), G::Timestamp, R>>::Batcher: 'static,
         <Tr as TraceReader>::Batch: Batch<Tr::KeyIn, K, Tr::ValIn, (), G::Timestamp, R>,
         Tr::Cursor: Cursor<K, (), G::Timestamp, R>,
     {

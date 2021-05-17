@@ -483,7 +483,7 @@ where
                             let mut builders = Vec::new();
                             for i in 0 .. capabilities.len() {
                                 buffers.push((capabilities[i].time().clone(), Vec::new()));
-                                builders.push(<T2::Batch as Batch<K,K,T2::ValIn,T2::Val,G::Timestamp,T2::R>>::Builder::new());
+                                builders.push(<T2::Batch as Batch<K,T1::Key,T2::ValIn,T2::Val,G::Timestamp,T2::R>>::Builder::new());
                             }
 
                             // cursors for navigating input and output traces.
