@@ -273,7 +273,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Abelian,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val, T2::R)>)+'static,
         {
@@ -296,7 +296,7 @@ pub trait ReduceCore<G: Scope, K: Data, V: Data, R: Semigroup> where G::Timestam
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val,T2::R)>)+'static
             ;
@@ -315,7 +315,7 @@ where
             T2::Val: Data,
             T2::R: Semigroup,
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static
     {
@@ -336,7 +336,7 @@ where
             T2: Trace+TraceReader<Key=K, Time=G::Timestamp>+'static,
             T2::Val: Data,
             T2::R: Semigroup,
-            T2::Batch: Batch<K, T2::Val, G::Timestamp, T2::R>,
+            T2::Batch: Batch<K, K, T2::ValIn, T2::Val, G::Timestamp, T2::R>,
             T2::Cursor: Cursor<K, T2::Val, G::Timestamp, T2::R>,
             L: FnMut(&K, &[(&V, R)], &mut Vec<(T2::Val,T2::R)>, &mut Vec<(T2::Val, T2::R)>)+'static {
 

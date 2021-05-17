@@ -44,4 +44,5 @@ mod merge_batcher;
 
 pub use self::merge_batcher::MergeBatcher as Batcher;
 
+pub mod col;
 pub mod ord;

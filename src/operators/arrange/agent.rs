@@ -86,7 +86,7 @@ where
     pub fn new(trace: Tr, operator: ::timely::dataflow::operators::generic::OperatorInfo, logging: Option<::logging::Logger>) -> (Self, TraceWriter<Tr>)
     where
         Tr: Trace,
-        Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+        Tr::Batch: Batch<Tr::KeyIn,Tr::Key,Tr::ValIn,Tr::Val,Tr::Time,Tr::R>,
     {
         let trace = Rc::new(RefCell::new(TraceBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));

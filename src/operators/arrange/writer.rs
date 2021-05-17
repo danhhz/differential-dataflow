@@ -23,7 +23,7 @@ pub struct TraceWriter<Tr>
 where
     Tr: Trace,
     Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+    Tr::Batch: Batch<Tr::KeyIn,Tr::Key,Tr::ValIn,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Current upper limit.
     upper: Antichain<Tr::Time>,
@@ -37,7 +37,7 @@ impl<Tr> TraceWriter<Tr>
 where
     Tr: Trace,
     Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+    Tr::Batch: Batch<Tr::KeyIn,Tr::Key,Tr::ValIn,Tr::Val,Tr::Time,Tr::R>,
 {
     /// Creates a new `TraceWriter`.
     pub fn new(
@@ -107,7 +107,7 @@ impl<Tr> Drop for TraceWriter<Tr>
 where
     Tr: Trace,
     Tr::Time: Lattice+Timestamp+Ord+Clone+std::fmt::Debug+'static,
-    Tr::Batch: Batch<Tr::Key,Tr::Val,Tr::Time,Tr::R>,
+    Tr::Batch: Batch<Tr::KeyIn,Tr::Key,Tr::ValIn,Tr::Val,Tr::Time,Tr::R>,
 {
     fn drop(&mut self) {
         self.seal(Antichain::new())

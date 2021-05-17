@@ -12,7 +12,7 @@ pub mod cursor_list;
 pub use self::cursor_list::CursorList;
 
 /// A cursor for navigating ordered `(key, val, time, diff)` updates.
-pub trait Cursor<K, V, T, R> {
+pub trait Cursor<K: ?Sized, V: ?Sized, T, R> {
 
     /// Type the cursor addresses data in.
     type Storage;

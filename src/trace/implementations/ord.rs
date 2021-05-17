@@ -76,7 +76,7 @@ where
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, V, T, R, O> Batch<K, V, T, R> for OrdValBatch<K, V, T, R, O>
+impl<K, V, T, R, O> Batch<K, K, V, V, T, R> for OrdValBatch<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -215,7 +215,7 @@ where
     should_compact: bool,
 }
 
-impl<K, V, T, R, O> Merger<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
+impl<K, V, T, R, O> Merger<K, K, V, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValMerger<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -358,7 +358,7 @@ where
     builder: OrderedBuilder<K, OrderedBuilder<V, OrderedLeafBuilder<T, R>, O>, O>,
 }
 
-impl<K, V, T, R, O> Builder<K, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
+impl<K, V, T, R, O> Builder<K, K, V, V, T, R, OrdValBatch<K, V, T, R, O>> for OrdValBuilder<K, V, T, R, O>
 where
     K: Ord+Clone+'static,
     V: Ord+Clone+'static,
@@ -429,7 +429,7 @@ where
     fn description(&self) -> &Description<T> { &self.desc }
 }
 
-impl<K, T, R, O> Batch<K, (), T, R> for OrdKeyBatch<K, T, R, O>
+impl<K, T, R, O> Batch<K, K, (), (), T, R> for OrdKeyBatch<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
@@ -535,7 +535,7 @@ where
     should_compact: bool,
 }
 
-impl<K, T, R, O> Merger<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
+impl<K, T, R, O> Merger<K, K, (), (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyMerger<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,
@@ -680,7 +680,7 @@ where
     builder: OrderedBuilder<K, OrderedLeafBuilder<T, R>, O>,
 }
 
-impl<K, T, R, O> Builder<K, (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
+impl<K, T, R, O> Builder<K, K, (), (), T, R, OrdKeyBatch<K, T, R, O>> for OrdKeyBuilder<K, T, R, O>
 where
     K: Ord+Clone+'static,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+'static,

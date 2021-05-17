@@ -197,7 +197,10 @@ pub trait TraceReader {
 /// The trace must be constructable from, and navigable by the `Key`, `Val`, `Time` types, but does not need
 /// to return them.
 pub trait Trace : TraceReader
-where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self::R> {
+where <Self as TraceReader>::Batch: Batch<Self::KeyIn, Self::Key, Self::ValIn, Self::Val, Self::Time, Self::R> {
+
+    type KeyIn;
+    type ValIn;
 
     /// Allocates a new empty trace.
     fn new(
@@ -232,7 +235,7 @@ where <Self as TraceReader>::Batch: Batch<Self::Key, Self::Val, Self::Time, Self
 /// but do not expose ways to construct the batches. This trait is appropriate for views of the batch, and is
 /// especially useful for views derived from other sources in ways that prevent the construction of batches
 /// from the type of data in the view (for example, filtered views, or views with extended time coordinates).
-pub trait BatchReader<K, V, T, R>
+pub trait BatchReader<K: ?Sized, V: ?Sized, T, R>
 where
     Self: ::std::marker::Sized,
 {
@@ -254,13 +257,13 @@ where
 }
 
 /// An immutable collection of updates.
-pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker::Sized {
+pub trait Batch<KI, K: ?Sized, VI, V: ?Sized, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker::Sized {
     /// A type used to assemble batches from disordered updates.
-    type Batcher: Batcher<K, V, T, R, Self>;
+    type Batcher: Batcher<KI, K, VI, V, T, R, Self>;
     /// A type used to assemble batches from ordered update sequences.
-    type Builder: Builder<K, V, T, R, Self>;
+    type Builder: Builder<KI, K, VI, V, T, R, Self>;
     /// A type used to progressively merge batches.
-    type Merger: Merger<K, V, T, R, Self>;
+    type Merger: Merger<KI, K, VI, V, T, R, Self>;
 
     /// Initiates the merging of consecutive batches.
     ///
@@ -277,11 +280,11 @@ pub trait Batch<K, V, T, R> : BatchReader<K, V, T, R> where Self: ::std::marker:
 }
 
 /// Functionality for collecting and batching updates.
-pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Batcher<KI, K: ?Sized, VI, V: ?Sized, T, R, Output: Batch<KI, K, VI, V, T, R>> {
     /// Allocates a new empty batcher.
     fn new() -> Self;
     /// Adds an unordered batch of elements to the batcher.
-    fn push_batch(&mut self, batch: &mut Vec<((K, V), T, R)>);
+    fn push_batch(&mut self, batch: &mut Vec<((KI, VI), T, R)>);
     /// Returns all updates not greater or equal to an element of `upper`.
     fn seal(&mut self, upper: Antichain<T>) -> Output;
     /// Returns the lower envelope of contained update times.
@@ -289,15 +292,15 @@ pub trait Batcher<K, V, T, R, Output: Batch<K, V, T, R>> {
 }
 
 /// Functionality for building batches from ordered update sequences.
-pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Builder<KI, K: ?Sized, VI, V: ?Sized, T, R, Output: Batch<KI, K, VI, V, T, R>> {
     /// Allocates an empty builder.
     fn new() -> Self;
     /// Allocates an empty builder with some capacity.
     fn with_capacity(cap: usize) -> Self;
     /// Adds an element to the batch.
-    fn push(&mut self, element: (K, V, T, R));
+    fn push(&mut self, element: (KI, VI, T, R));
     /// Adds an ordered sequence of elements to the batch.
-    fn extend<I: Iterator<Item=(K,V,T,R)>>(&mut self, iter: I) {
+    fn extend<I: Iterator<Item=(KI,VI,T,R)>>(&mut self, iter: I) {
         for item in iter { self.push(item); }
     }
     /// Completes building and returns the batch.
@@ -305,7 +308,7 @@ pub trait Builder<K, V, T, R, Output: Batch<K, V, T, R>> {
 }
 
 /// Represents a merge in progress.
-pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
+pub trait Merger<KI, K: ?Sized, VI, V: ?Sized, T, R, Output: Batch<KI, K, VI, V, T, R>> {
     /// Creates a new merger to merge the supplied batches, optionally compacting
     /// up to the supplied frontier.
     fn new(source1: &Output, source2: &Output, compaction_frontier: Option<AntichainRef<T>>) -> Self;
@@ -324,6 +327,7 @@ pub trait Merger<K, V, T, R, Output: Batch<K, V, T, R>> {
 
 
 /// Blanket implementations for reference counted batches.
+#[cfg(proc_macro)]
 pub mod rc_blanket_impls {
 
     use std::rc::Rc;
@@ -428,6 +432,7 @@ pub mod rc_blanket_impls {
 
 
 /// Blanket implementations for reference counted batches.
+#[cfg(proc_macro)]
 pub mod abomonated_blanket_impls {
 
     extern crate abomonation;
