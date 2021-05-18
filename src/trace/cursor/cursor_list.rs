@@ -7,14 +7,14 @@ use super::Cursor;
 /// The `CursorList` tracks the indices of cursors with the minimum key, and the the indices of cursors with
 /// the minimum key and minimum value. It performs no clever management of these sets otherwise.
 #[derive(Debug)]
-pub struct CursorList<K, V, T, R, C: Cursor<K, V, T, R>> {
-    _phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+pub struct CursorList<K: ?Sized, V: ?Sized, T, R, C: Cursor<K, V, T, R>> {
+    _phantom: ::std::marker::PhantomData<(Box<K>, Box<V>, T, R)>,
     cursors: Vec<C>,
     min_key: Vec<usize>,
     min_val: Vec<usize>,
 }
 
-impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, V: Ord {
+impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord+?Sized, V: Ord+?Sized {
     /// Creates a new cursor list from pre-existing cursors.
     pub fn new(cursors: Vec<C>, storage: &[C::Storage]) -> Self {
 
@@ -89,8 +89,8 @@ impl<K, V, T, R, C: Cursor<K, V, T, R>> CursorList<K, V, T, R, C> where K: Ord, 
 
 impl<K, V, T, R, C: Cursor<K, V, T, R>> Cursor<K, V, T, R> for CursorList<K, V, T, R, C>
 where
-    K: Ord,
-    V: Ord {
+    K: Ord+?Sized,
+    V: Ord+?Sized {
 
     type Storage = Vec<C::Storage>;
 

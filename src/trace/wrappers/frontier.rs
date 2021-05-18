@@ -83,8 +83,8 @@ where
 
 
 /// Wrapper to provide batch to nested scope.
-pub struct BatchFrontier<K, V, T, R, B> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+pub struct BatchFrontier<K: ?Sized, V: ?Sized, T, R, B> {
+    phantom: ::std::marker::PhantomData<(Box<K>, Box<V>, T, R)>,
     batch: B,
     frontier: Antichain<T>,
 }
@@ -129,8 +129,8 @@ where
 }
 
 /// Wrapper to provide cursor to nested scope.
-pub struct CursorFrontier<K, V, T, R, C: Cursor<K, V, T, R>> {
-    phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+pub struct CursorFrontier<K: ?Sized, V: ?Sized, T, R, C: Cursor<K, V, T, R>> {
+    phantom: ::std::marker::PhantomData<(Box<K>, Box<V>, T, R)>,
     cursor: C,
     frontier: Antichain<T>,
 }

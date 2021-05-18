@@ -20,7 +20,7 @@ use timely::scheduling::Activator;
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
 use super::TraceReplayInstruction;
 
-use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
+// use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};
 
 
 /// A `TraceReader` wrapper which can be imported into other dataflows.
@@ -409,6 +409,7 @@ where
     ///     }).unwrap();
     /// }
     /// ```
+    #[cfg(proc_macro)]
     pub fn import_frontier<G>(&mut self, scope: &G, name: &str) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,
@@ -421,6 +422,7 @@ where
     }
 
     /// Import a trace advanced to a specific frontier.
+    #[cfg(proc_macro)]
     pub fn import_frontier_core<G>(&mut self, scope: &G, name: &str, frontier: Antichain<Tr::Time>) -> (Arranged<G, TraceFrontier<TraceAgent<Tr>>>, ShutdownButton<CapabilitySet<Tr::Time>>)
     where
         G: Scope<Timestamp=Tr::Time>,

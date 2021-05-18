@@ -28,7 +28,7 @@ fn main() {
 
             let data = data.arrange::<ColValSpine<_,_>>();
             let keys = keys.arrange::<ColValSpine<_,_>>();
-            keys.join_core(&data, |_k, &(), &()| Option::<()>::None)
+            keys.join_core(&data, |_k, _, _| Option::<()>::None)
                 .probe_with(&mut probe);
 
             (data_input, keys_input)

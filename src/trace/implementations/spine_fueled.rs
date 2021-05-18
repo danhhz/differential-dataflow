@@ -87,10 +87,10 @@ use ::timely::order::PartialOrder;
 /// A spine maintains a small number of immutable collections of update tuples, merging the collections when
 /// two have similar sizes. In this way, it allows the addition of more tuples, which may then be merged with
 /// other immutable collections.
-pub struct Spine<KI, K, VI, V, T: Lattice+Ord, R: Semigroup, B: Batch<KI, K, VI, V, T, R>> {
+pub struct Spine<KI, K: ?Sized, VI, V: ?Sized, T: Lattice+Ord, R: Semigroup, B: Batch<KI, K, VI, V, T, R>> {
     operator: OperatorInfo,
     logger: Option<Logger>,
-    phantom: ::std::marker::PhantomData<(K, V, R)>,
+    phantom: ::std::marker::PhantomData<(Box<K>, Box<V>, R)>,
     logical_frontier: Antichain<T>,                   // Times after which the trace must accumulate correctly.
     physical_frontier: Antichain<T>,                   // Times after which the trace must be able to subset its inputs.
     merging: Vec<MergeState<KI,K,VI,V,T,R,B>>,// Several possibly shared collections of updates.
@@ -103,9 +103,9 @@ pub struct Spine<KI, K, VI, V, T: Lattice+Ord, R: Semigroup, B: Batch<KI, K, VI,
 impl<KI, K, VI, V, T, R, B> TraceReader for Spine<KI, K, VI, V, T, R, B>
 where
     KI: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    K: Ord,
+    K: Ord+?Sized,
     VI: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    V: Ord,
+    V: Ord+?Sized,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     // WIP can this be BatchReader?
@@ -247,9 +247,9 @@ where
 impl<KI, K, VI, V, T, R, B> Trace for Spine<KI, K, VI, V, T, R, B>
 where
     KI: Ord+Clone,
-    K: Ord,
+    K: Ord+?Sized,
     VI: Ord+Clone,
-    V: Ord,
+    V: Ord+?Sized,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>+Clone+'static,
@@ -327,6 +327,8 @@ where
 // Drop implementation allows us to log batch drops, to zero out maintained totals.
 impl<KI, K, VI, V, T, R, B> Drop for Spine<KI, K, VI, V, T, R, B>
 where
+    K: ?Sized,
+    V: ?Sized,
     T: Lattice+Ord,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>,
@@ -339,6 +341,8 @@ where
 
 impl<KI, K, VI, V, T, R, B> Spine<KI, K, VI, V, T, R, B>
 where
+    K: ?Sized,
+    V: ?Sized,
     T: Lattice+Ord,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>,
@@ -386,7 +390,9 @@ where
 impl<KI, K, VI, V, T, R, B> Spine<KI, K, VI, V, T, R, B>
 where
     KI: Ord+Clone,
+    K: ?Sized,
     VI: Ord+Clone,
+    V: ?Sized,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>,
@@ -773,7 +779,7 @@ where
 ///
 /// A layer can be empty, contain a single batch, or contain a pair of batches
 /// that are in the process of merging into a batch for the next layer.
-enum MergeState<KI, K, VI, V, T, R, B: Batch<KI, K, VI, V, T, R>> {
+enum MergeState<KI, K:?Sized, VI, V:?Sized, T, R, B: Batch<KI, K, VI, V, T, R>> {
     /// An empty layer, containing no updates.
     Vacant,
     /// A layer containing a single batch.
@@ -785,7 +791,7 @@ enum MergeState<KI, K, VI, V, T, R, B: Batch<KI, K, VI, V, T, R>> {
     Double(MergeVariant<KI, K, VI, V, T, R, B>),
 }
 
-impl<KI, K, VI, V, T: Eq, R, B: Batch<KI, K, VI, V, T, R>> MergeState<KI, K, VI, V, T, R, B> {
+impl<KI, K:?Sized, VI, V:?Sized, T: Eq, R, B: Batch<KI, K, VI, V, T, R>> MergeState<KI, K, VI, V, T, R, B> {
 
     /// The number of actual updates contained in the level.
     fn len(&self) -> usize {
@@ -883,14 +889,14 @@ impl<KI, K, VI, V, T: Eq, R, B: Batch<KI, K, VI, V, T, R>> MergeState<KI, K, VI,
     }
 }
 
-enum MergeVariant<KI, K, VI, V, T, R, B: Batch<KI, K, VI, V, T, R>> {
+enum MergeVariant<KI, K:?Sized, VI, V:?Sized, T, R, B: Batch<KI, K, VI, V, T, R>> {
     /// Describes an actual in-progress merge between two non-trivial batches.
     InProgress(B, B, <B as Batch<KI, K, VI, V,T,R>>::Merger),
     /// A merge that requires no further work. May or may not represent a non-trivial batch.
     Complete(Option<(B, Option<(B, B)>)>),
 }
 
-impl<KI, K, VI, V, T, R, B: Batch<KI, K, VI, V, T, R>> MergeVariant<KI, K, VI, V, T, R, B> {
+impl<KI, K:?Sized, VI, V:?Sized, T, R, B: Batch<KI, K, VI, V, T, R>> MergeVariant<KI, K, VI, V, T, R, B> {
 
     /// Completes and extracts the batch, unless structurally empty.
     ///

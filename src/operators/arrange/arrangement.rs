@@ -79,7 +79,6 @@ where
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
 
-#[cfg(proc_macro)]
 impl<G: Scope, Tr> Arranged<G, Tr>
 where
     G::Timestamp: Lattice+Ord,
@@ -92,6 +91,7 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
+    #[cfg(proc_macro)]
     pub fn enter<'a, TInner>(&self, child: &Child<'a, G, TInner>)
         -> Arranged<Child<'a, G, TInner>, TraceEnter<Tr, TInner>>
         where
@@ -130,6 +130,7 @@ where
     /// This method produces a proxy trace handle that uses the same backing data, but acts as if the timestamps
     /// have all been extended with an additional coordinate with the default value. The resulting collection does
     /// not vary with the new timestamp coordinate.
+    #[cfg(proc_macro)]
     pub fn enter_at<'a, TInner, F, P>(&self, child: &Child<'a, G, TInner>, logic: F, prior: P)
         -> Arranged<Child<'a, G, TInner>, TraceEnterAt<Tr, TInner, F, P>>
         where
@@ -180,6 +181,7 @@ where
     ///     });
     /// }
     /// ```
+    #[cfg(proc_macro)]
     pub fn filter<F>(&self, logic: F)
         -> Arranged<G, TraceFilter<Tr, F>>
         where
@@ -450,7 +452,9 @@ pub trait Arrange<G: Scope, KI, K, VI, V, R: Semigroup>
 where
     G::Timestamp: Lattice,
     KI: Data,
+    K: ?Sized,
     VI: Data,
+    V: ?Sized,
 {
     /// Arranges a stream of `(Key, Val)` updates by `Key`. Accepts an empty instance of the trace type.
     ///
@@ -512,7 +516,9 @@ where
     G: Scope,
     G::Timestamp: Lattice+Ord,
     KI: ExchangeData+Hashable,
+    K: ?Sized,
     VI: ExchangeData,
+    V: ?Sized,
     R: Semigroup+ExchangeData,
 {
     fn arrange_core<P, Tr>(&self, pact: P, name: &str) -> Arranged<G, TraceAgent<Tr>>

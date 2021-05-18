@@ -11,7 +11,7 @@ pub mod cursor;
 pub mod description;
 pub mod implementations;
 pub mod layers;
-// pub mod wrappers;
+pub mod wrappers;
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
@@ -337,7 +337,7 @@ pub mod rc_blanket_impls {
     use timely::progress::{Antichain, frontier::AntichainRef};
     use super::{Batch, BatchReader, Batcher, Builder, Merger, Cursor, Description};
 
-    impl<K, V, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
+    impl<K:?Sized, V:?Sized, T, R, B: BatchReader<K,V,T,R>> BatchReader<K,V,T,R> for Rc<B> {
 
         /// The type used to enumerate the batch's contents.
         type Cursor = RcBatchCursor<K, V, T, R, B>;
@@ -353,12 +353,12 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper to provide cursor to nested scope.
-    pub struct RcBatchCursor<K, V, T, R, B: BatchReader<K, V, T, R>> {
-        phantom: ::std::marker::PhantomData<(K, V, T, R)>,
+    pub struct RcBatchCursor<K:?Sized, V:?Sized, T, R, B: BatchReader<K, V, T, R>> {
+        phantom: ::std::marker::PhantomData<(Box<K>, Box<V>, T, R)>,
         cursor: B::Cursor,
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
+    impl<K:?Sized, V:?Sized, T, R, B: BatchReader<K, V, T, R>> RcBatchCursor<K, V, T, R, B> {
         fn new(cursor: B::Cursor) -> Self {
             RcBatchCursor {
                 cursor,
@@ -367,7 +367,7 @@ pub mod rc_blanket_impls {
         }
     }
 
-    impl<K, V, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for RcBatchCursor<K, V, T, R, B> {
+    impl<K:?Sized, V:?Sized, T, R, B: BatchReader<K, V, T, R>> Cursor<K, V, T, R> for RcBatchCursor<K, V, T, R, B> {
 
         type Storage = Rc<B>;
 
@@ -393,17 +393,17 @@ pub mod rc_blanket_impls {
     }
 
     /// An immutable collection of updates.
-    impl<KI,K,VI,V,T,R,B: Batch<KI,K,VI,V,T,R>> Batch<KI, K, VI, V, T, R> for Rc<B> {
+    impl<KI,K:?Sized,VI,V:?Sized,T,R,B: Batch<KI,K,VI,V,T,R>> Batch<KI, K, VI, V, T, R> for Rc<B> {
         type Batcher = RcBatcher<KI, K, VI, V, T, R, B>;
         type Builder = RcBuilder<KI, K, VI, V, T, R, B>;
         type Merger = RcMerger<KI, K, VI, V, T, R, B>;
     }
 
     /// Wrapper type for batching reference counted batches.
-    pub struct RcBatcher<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> { batcher: B::Batcher }
+    pub struct RcBatcher<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> { batcher: B::Batcher }
 
     /// Functionality for collecting and batching updates.
-    impl<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> Batcher<KI, K, VI, V, T, R, Rc<B>> for RcBatcher<KI,K,VI,V,T,R,B> {
+    impl<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> Batcher<KI, K, VI, V, T, R, Rc<B>> for RcBatcher<KI,K,VI,V,T,R,B> {
         fn new() -> Self { RcBatcher { batcher: <B::Batcher as Batcher<KI,K,VI,V,T,R,B>>::new() } }
         fn push_batch(&mut self, batch: &mut Vec<((KI, VI), T, R)>) { self.batcher.push_batch(batch) }
         fn seal(&mut self, upper: Antichain<T>) -> Rc<B> { Rc::new(self.batcher.seal(upper)) }
@@ -411,10 +411,10 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper type for building reference counted batches.
-    pub struct RcBuilder<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> { builder: B::Builder }
+    pub struct RcBuilder<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> { builder: B::Builder }
 
     /// Functionality for building batches from ordered update sequences.
-    impl<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> Builder<KI, K, VI, V, T, R, Rc<B>> for RcBuilder<KI,K,VI,V,T,R,B> {
+    impl<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> Builder<KI, K, VI, V, T, R, Rc<B>> for RcBuilder<KI,K,VI,V,T,R,B> {
         fn new() -> Self { RcBuilder { builder: <B::Builder as Builder<KI,K,VI,V,T,R,B>>::new() } }
         fn with_capacity(cap: usize) -> Self { RcBuilder { builder: <B::Builder as Builder<KI,K,VI,V,T,R,B>>::with_capacity(cap) } }
         fn push(&mut self, element: (KI, VI, T, R)) { self.builder.push(element) }
@@ -422,10 +422,10 @@ pub mod rc_blanket_impls {
     }
 
     /// Wrapper type for merging reference counted batches.
-    pub struct RcMerger<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> { merger: B::Merger }
+    pub struct RcMerger<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> { merger: B::Merger }
 
     /// Represents a merge in progress.
-    impl<KI,K,VI,V,T,R,B:Batch<KI,K,VI,V,T,R>> Merger<KI, K, VI, V, T, R, Rc<B>> for RcMerger<KI,K,VI,V,T,R,B> {
+    impl<KI,K:?Sized,VI,V:?Sized,T,R,B:Batch<KI,K,VI,V,T,R>> Merger<KI, K, VI, V, T, R, Rc<B>> for RcMerger<KI,K,VI,V,T,R,B> {
         fn new(source1: &Rc<B>, source2: &Rc<B>, compaction_frontier: Option<AntichainRef<T>>) -> Self { RcMerger { merger: B::begin_merge(source1, source2, compaction_frontier) } }
         fn work(&mut self, source1: &Rc<B>, source2: &Rc<B>, fuel: &mut isize) { self.merger.work(source1, source2, fuel) }
         fn done(self) -> Rc<B> { Rc::new(self.merger.done()) }

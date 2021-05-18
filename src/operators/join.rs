@@ -561,7 +561,7 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, D>
+struct Deferred<K: ?Sized, V1, V2, T, R1, R2, R3, C1, C2, D>
 where
     V1: Ord+Clone,
     V2: Ord+Clone,
@@ -573,7 +573,7 @@ where
     C2: Cursor<K, V2, T, R2>,
     D: Ord+Clone+Data,
 {
-    phant: ::std::marker::PhantomData<(K, V1, V2, R1, R2)>,
+    phant: ::std::marker::PhantomData<(Box<K>, V1, V2, R1, R2)>,
     trace: C1,
     trace_storage: C1::Storage,
     batch: C2,
@@ -585,7 +585,7 @@ where
 
 impl<K, V1, V2, T, R1, R2, R3, C1, C2, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, D>
 where
-    K: Ord+Debug+Eq,
+    K: Ord+Debug+Eq+?Sized,
     V1: Ord+Clone+Debug,
     V2: Ord+Clone+Debug,
     T: Timestamp+Lattice+Ord+Debug,

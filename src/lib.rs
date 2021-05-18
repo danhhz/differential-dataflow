@@ -102,7 +102,7 @@ extern crate serde;
 
 pub mod hashable;
 pub mod operators;
-pub mod algorithms;
+// pub mod algorithms;
 pub mod lattice;
 pub mod trace;
 pub mod input;
