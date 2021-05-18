@@ -102,8 +102,10 @@ pub struct Spine<KI, K, VI, V, T: Lattice+Ord, R: Semigroup, B: Batch<KI, K, VI,
 
 impl<KI, K, VI, V, T, R, B> TraceReader for Spine<KI, K, VI, V, T, R, B>
 where
-    K: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
-    V: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
+    KI: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
+    K: Ord,
+    VI: Ord+Clone,           // Clone is required by `batch::advance_*` (in-place could remove).
+    V: Ord,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     // WIP can this be BatchReader?
@@ -244,8 +246,10 @@ where
 // TODO: Almost all this implementation seems to be generic with respect to the trace and batch types.
 impl<KI, K, VI, V, T, R, B> Trace for Spine<KI, K, VI, V, T, R, B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
+    KI: Ord+Clone,
+    K: Ord,
+    VI: Ord+Clone,
+    V: Ord,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>+Clone+'static,
@@ -381,8 +385,8 @@ where
 
 impl<KI, K, VI, V, T, R, B> Spine<KI, K, VI, V, T, R, B>
 where
-    K: Ord+Clone,
-    V: Ord+Clone,
+    KI: Ord+Clone,
+    VI: Ord+Clone,
     T: Lattice+timely::progress::Timestamp+Ord+Clone+Debug,
     R: Semigroup,
     B: Batch<KI, K, VI, V, T, R>,

@@ -11,7 +11,7 @@ pub mod cursor;
 pub mod description;
 pub mod implementations;
 pub mod layers;
-pub mod wrappers;
+// pub mod wrappers;
 
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::progress::Timestamp;
@@ -43,9 +43,9 @@ pub use self::description::Description;
 pub trait TraceReader {
 
     /// Key by which updates are indexed.
-    type Key;
+    type Key: ?Sized;
     /// Values associated with keys.
-    type Val;
+    type Val: ?Sized;
     /// Timestamps associated with updates
     type Time;
     /// Associated update.

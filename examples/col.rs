@@ -23,8 +23,8 @@ fn main() {
             use differential_dataflow::operators::{arrange::Arrange, JoinCore};
             use differential_dataflow::trace::implementations::col::{ColValSpine};
 
-            let (data_input, data) = scope.new_collection::<Vec<u8>, isize>();
-            let (keys_input, keys) = scope.new_collection::<Vec<u8>, isize>();
+            let (data_input, data) = scope.new_collection::<(Vec<u8>, Vec<u8>), isize>();
+            let (keys_input, keys) = scope.new_collection::<(Vec<u8>, Vec<u8>), isize>();
 
             let data = data.arrange::<ColValSpine<_,_>>();
             let keys = keys.arrange::<ColValSpine<_,_>>();
@@ -40,7 +40,7 @@ fn main() {
             let mut i = worker.index();
             while i < size {
                 let val = (counter + i) % keys;
-                data_input.insert(format!("{:?}", val).into_bytes());
+                data_input.insert((format!("{:?}", val).into_bytes(), vec![]));
                 i += worker.peers();
             }
             counter += size;
@@ -60,7 +60,7 @@ fn main() {
             let mut i = worker.index();
             while i < size {
                 let val = (queries + i) % keys;
-                keys_input.insert(format!("{:?}", val).into_bytes());
+                keys_input.insert((format!("{:?}", val).into_bytes(), vec![]));
                 i += worker.peers();
             }
             queries += size;

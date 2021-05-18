@@ -33,10 +33,10 @@ use trace::{Trace, TraceReader, Batch, BatchReader, Batcher, Cursor};
 use trace::implementations::ord::OrdValSpine as DefaultValTrace;
 use trace::implementations::ord::OrdKeySpine as DefaultKeyTrace;
 
-use trace::wrappers::enter::{TraceEnter, BatchEnter};
-use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
-use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
-use trace::wrappers::filter::{TraceFilter, BatchFilter};
+// use trace::wrappers::enter::{TraceEnter, BatchEnter};
+// use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
+// use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
+// use trace::wrappers::filter::{TraceFilter, BatchFilter};
 
 use super::TraceAgent;
 
@@ -79,6 +79,7 @@ where
 use ::timely::dataflow::scopes::Child;
 use ::timely::progress::timestamp::Refines;
 
+#[cfg(proc_macro)]
 impl<G: Scope, Tr> Arranged<G, Tr>
 where
     G::Timestamp: Lattice+Ord,
