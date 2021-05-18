@@ -257,7 +257,7 @@ pub trait JoinCore<G: Scope, K: ?Sized + 'static, V: ?Sized + 'static, R: Semigr
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
         <R as Multiply<Tr2::R>>::Output: Semigroup,
@@ -281,7 +281,7 @@ where
         Tr2: TraceReader<Key=K, Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<K, Tr2::Val, G::Timestamp, Tr2::R>+'static,
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2::R: Semigroup,
         R: Multiply<Tr2::R>,
         <R as Multiply<Tr2::R>>::Output: Semigroup,
@@ -300,14 +300,14 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
         G::Timestamp: Lattice+Ord+Debug,
         T1: TraceReader<Time=G::Timestamp>+Clone+'static,
         T1::Key: Ord+Debug+'static,
-        T1::Val: Ord+Clone+Debug+'static,
+        T1::Val: Ord+Debug+'static,
         T1::R: Semigroup,
         T1::Batch: BatchReader<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
         T1::Cursor: Cursor<T1::Key,T1::Val,G::Timestamp,T1::R>+'static,
 {
     fn join_core<Tr2,I,L>(&self, other: &Arranged<G,Tr2>, mut result: L) -> Collection<G,I::Item,<T1::R as Multiply<Tr2::R>>::Output>
     where
-        Tr2::Val: Ord+Clone+Debug+'static,
+        Tr2::Val: Ord+Debug+'static,
         Tr2: TraceReader<Key=T1::Key,Time=G::Timestamp>+Clone+'static,
         Tr2::Batch: BatchReader<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
         Tr2::Cursor: Cursor<T1::Key, Tr2::Val, G::Timestamp, Tr2::R>+'static,
@@ -561,10 +561,10 @@ impl<G, T1> JoinCore<G, T1::Key, T1::Val, T1::R> for Arranged<G,T1>
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<K: ?Sized, V1, V2, T, R1, R2, R3, C1, C2, D>
+struct Deferred<K: ?Sized, V1: ?Sized, V2: ?Sized, T, R1, R2, R3, C1, C2, D>
 where
-    V1: Ord+Clone,
-    V2: Ord+Clone,
+    V1: Ord,
+    V2: Ord,
     T: Timestamp+Lattice+Ord+Debug,
     R1: Semigroup,
     R2: Semigroup,
@@ -573,7 +573,7 @@ where
     C2: Cursor<K, V2, T, R2>,
     D: Ord+Clone+Data,
 {
-    phant: ::std::marker::PhantomData<(Box<K>, V1, V2, R1, R2)>,
+    phant: ::std::marker::PhantomData<(Box<K>, Box<V1>, Box<V2>, R1, R2)>,
     trace: C1,
     trace_storage: C1::Storage,
     batch: C2,
@@ -586,8 +586,8 @@ where
 impl<K, V1, V2, T, R1, R2, R3, C1, C2, D> Deferred<K, V1, V2, T, R1, R2, R3, C1, C2, D>
 where
     K: Ord+Debug+Eq+?Sized,
-    V1: Ord+Clone+Debug,
-    V2: Ord+Clone+Debug,
+    V1: Ord+Debug+?Sized,
+    V2: Ord+Debug+?Sized,
     T: Timestamp+Lattice+Ord+Debug,
     R1: Semigroup,
     R2: Semigroup,
@@ -679,12 +679,12 @@ where
     }
 }
 
-struct JoinThinker<'a, V1: Ord+Clone+'a, V2: Ord+Clone+'a, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
+struct JoinThinker<'a, V1: Ord+'a+?Sized, V2: Ord+'a+?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> {
     pub history1: ValueHistory<'a, V1, T, R1>,
     pub history2: ValueHistory<'a, V2, T, R2>,
 }
 
-impl<'a, V1: Ord+Clone, V2: Ord+Clone, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2>
+impl<'a, V1: Ord+?Sized, V2: Ord+?Sized, T: Lattice+Ord+Clone, R1: Semigroup, R2: Semigroup> JoinThinker<'a, V1, V2, T, R1, R2>
 where V1: Debug, V2: Debug, T: Debug
 {
     fn new() -> Self {
